@@ -157,7 +157,8 @@ document.getElementById('add').onclick=()=>transactionForm();document.getElement
 const CFG='mis-finanzas-google-drive-config-v1',BASE='mis-finanzas-google-drive-base-v1';
 const FILE='mis-finanzas-sync-v1.json',SCOPE='https://www.googleapis.com/auth/drive.appdata';
 let token='',tokenExpires=0,client=null,busy=false,timer=0,driveFileId='',lastStatus='Sin conectar';
-const cfg=()=>{try{return JSON.parse(localStorage.getItem(CFG)||'{}')}catch{return {}}};
+const DEFAULT_CLIENT_ID='977076702377-qfvfg50kiajoc50s65kuf88m3i7gqkd6.apps.googleusercontent.com';
+const cfg=()=>{try{return {clientId:DEFAULT_CLIENT_ID,...JSON.parse(localStorage.getItem(CFG)||'{}')}}catch{return {clientId:DEFAULT_CLIENT_ID}}};
 const config=v=>localStorage.setItem(CFG,JSON.stringify(v));
 const hash=async value=>{const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(value)));return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')};
 const snapshot=()=>{const d=JSON.parse(localStorage.getItem(KEY)||'{}');delete d.settings?.cloudKey;delete d.settings?.syncSecret;delete d.settings?.cloudUrl;return d};
