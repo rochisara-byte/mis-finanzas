@@ -156,7 +156,7 @@ document.getElementById('add').onclick=()=>transactionForm();document.getElement
 (()=>{'use strict';
 const CFG='mis-finanzas-google-drive-config-v1',BASE='mis-finanzas-google-drive-base-v1';
 const FILE='mis-finanzas-sync-v1.json',SCOPE='https://www.googleapis.com/auth/drive.appdata';
-let token='',tokenExpires=0,client=null,busy=false,timer=0,driveFileId='',lastStatus='Sin conectar',pending=false,conflict=false;
+let token='',tokenExpires=0,client=null,busy=false,timer=0,driveFileId='',lastStatus='Sin conectar',pending=false,conflict=false,silentAttempted=false;
 const DEFAULT_CLIENT_ID='977076702377-qfvfg50kiajoc50s65kuf88m3i7gqkd6.apps.googleusercontent.com';
 const cfg=()=>{try{return {clientId:DEFAULT_CLIENT_ID,...JSON.parse(localStorage.getItem(CFG)||'{}')}}catch{return {clientId:DEFAULT_CLIENT_ID}}};
 const config=v=>localStorage.setItem(CFG,JSON.stringify(v));
@@ -267,6 +267,18 @@ async function sync(interactive=false){
  }catch(e){setStatus(pending?'Drive · Pendiente':'Drive · Revisar','problem');if(interactive)alert('No se pudo sincronizar: '+e.message);console.warn('Sincronización Drive:',e)}
  finally{busy=false}
 }
+// Intento no interactivo, solo una vez por apertura. Google puede exigir un gesto del usuario.
+async function reconnectSilently(){
+ if(silentAttempted||!navigator.onLine||document.hidden||busy||token)return;
+ silentAttempted=true;
+ try{
+  await authorize(false);
+  await sync(false);
+ }catch(e){
+  console.info('Drive: reconexión silenciosa no disponible:',e?.message||e);
+  pendingStatus();
+ }
+}
 function schedule(){clearTimeout(timer);timer=setTimeout(()=>sync(false),1800)}
 window.addEventListener('finanzas-local-save',()=>{pending=true;if(!busy)pendingStatus();schedule()});
 window.addEventListener('online',()=>{if(!busy)setStatus('Drive · Reintentando','connected');schedule()});
@@ -274,9 +286,9 @@ window.addEventListener('offline',()=>{if(!busy)pendingStatus()});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)schedule()});
 setInterval(()=>{if(!document.hidden&&navigator.onLine&&token&&Date.now()<tokenExpires-60000)schedule()},60000);
 refreshPending();
-function showPanel(){const c=cfg();open(`<div class="between"><h2>Google Drive <small style="font-size:11px;color:#667085">Corrección 6.2 · 09/10/2026</small></h2><button class="iconbtn" data-action="close">✕</button></div><div class="drive-box"><p>Sincroniza tus datos privados de Mis Finanzas con tu Google Drive. Solo se solicita acceso a los datos privados de esta aplicación, no a tus otros archivos.</p><label class="field">ID de cliente OAuth (aplicación web)<input id="driveClientId" type="text" placeholder="123456789-...apps.googleusercontent.com" value="${esc(c.clientId||'')}"></label><p>En Google Cloud configura una pantalla de consentimiento y un cliente OAuth tipo <b>Aplicación web</b>. Agrega el origen HTTPS donde publiques la app en <b>Orígenes autorizados de JavaScript</b>. Si está en modo pruebas, agrega tu correo como usuario de prueba.</p><button class="secondary" id="driveSaveConfig">Guardar ID</button><button class="primary" id="driveConnect">Conectar Google y sincronizar</button><button class="secondary" id="driveSyncNow">Sincronizar ahora</button><button class="secondary" id="driveReset" style="border:1px solid #dc8791;color:#ad3c4c;background:#fff8f8">Reiniciar y verificar copia</button><p class="danger-text">Solo si no necesitas conservar la copia anterior de Mis Finanzas en Drive. Requiere doble confirmación.</p><p>Estado: <b>${esc(lastStatus)}</b>. Los datos se guardan también en este navegador. Si dos dispositivos cambian los datos a la vez, se pedirá elegir una versión para evitar sobrescrituras silenciosas.</p><p class="danger-text">No abras el HTML directamente desde Descargas para autenticarte: publícalo en HTTPS. Nunca compartas secretos OAuth ni contraseñas.</p></div>`);document.getElementById('driveSaveConfig').onclick=()=>{const id=document.getElementById('driveClientId').value.trim();if(!validId(id))return alert('ID de cliente OAuth no válido.');if(id!==cfg().clientId){token='';client=null;localStorage.removeItem(BASE)}config({clientId:id});alert('ID guardado en este navegador.')};document.getElementById('driveConnect').onclick=async()=>{try{const id=document.getElementById('driveClientId').value.trim();if(!validId(id))return alert('Primero introduce un ID OAuth válido.');if(id!==cfg().clientId){token='';client=null;localStorage.removeItem(BASE)}config({clientId:id});await authorize(true);close();await sync(true)}catch(e){alert('No se pudo conectar: '+e.message)}};document.getElementById('driveSyncNow').onclick=async()=>{close();try{await sync(true)}catch(e){alert(e.message)}};document.getElementById('driveReset').onclick=resetRemote}
+function showPanel(){const c=cfg();open(`<div class="between"><h2>Google Drive <small style="font-size:11px;color:#667085">Corrección 6.3 · 10/10/2026</small></h2><button class="iconbtn" data-action="close">✕</button></div><div class="drive-box"><p>Sincroniza tus datos privados de Mis Finanzas con tu Google Drive. Solo se solicita acceso a los datos privados de esta aplicación, no a tus otros archivos.</p><label class="field">ID de cliente OAuth (aplicación web)<input id="driveClientId" type="text" placeholder="123456789-...apps.googleusercontent.com" value="${esc(c.clientId||'')}"></label><p>En Google Cloud configura una pantalla de consentimiento y un cliente OAuth tipo <b>Aplicación web</b>. Agrega el origen HTTPS donde publiques la app en <b>Orígenes autorizados de JavaScript</b>. Si está en modo pruebas, agrega tu correo como usuario de prueba.</p><button class="secondary" id="driveSaveConfig">Guardar ID</button><button class="primary" id="driveConnect">Conectar Google y sincronizar</button><button class="secondary" id="driveSyncNow">Sincronizar ahora</button><button class="secondary" id="driveReset" style="border:1px solid #dc8791;color:#ad3c4c;background:#fff8f8">Reiniciar y verificar copia</button><p class="danger-text">Solo si no necesitas conservar la copia anterior de Mis Finanzas en Drive. Requiere doble confirmación.</p><p>Estado: <b>${esc(lastStatus)}</b>. Los datos se guardan también en este navegador. Si dos dispositivos cambian los datos a la vez, se pedirá elegir una versión para evitar sobrescrituras silenciosas.</p><p class="danger-text">No abras el HTML directamente desde Descargas para autenticarte: publícalo en HTTPS. Nunca compartas secretos OAuth ni contraseñas.</p></div>`);document.getElementById('driveSaveConfig').onclick=()=>{const id=document.getElementById('driveClientId').value.trim();if(!validId(id))return alert('ID de cliente OAuth no válido.');if(id!==cfg().clientId){token='';client=null;localStorage.removeItem(BASE)}config({clientId:id});alert('ID guardado en este navegador.')};document.getElementById('driveConnect').onclick=async()=>{try{const id=document.getElementById('driveClientId').value.trim();if(!validId(id))return alert('Primero introduce un ID OAuth válido.');if(id!==cfg().clientId){token='';client=null;localStorage.removeItem(BASE)}config({clientId:id});await authorize(true);close();await sync(true)}catch(e){alert('No se pudo conectar: '+e.message)}};document.getElementById('driveSyncNow').onclick=async()=>{close();try{await sync(true)}catch(e){alert(e.message)}};document.getElementById('driveReset').onclick=resetRemote}
 if(cfg().clientId){
-  // Corrección 5: la autorización de Google requiere una acción explícita.
+  // La reconexión silenciosa nunca debe iniciar un flujo interactivo.
   // prompt vacío también puede mostrar Google en navegadores móviles.
   pendingStatus();
 }
