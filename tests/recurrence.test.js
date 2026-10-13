@@ -187,7 +187,41 @@ test('does not duplicate next occurrence after pending done pending done sequenc
   assert.strictEqual(transactions.find(t => t.id === 'r1').generatedNextId, firstChildId);
 });
 
-test('recognizes legacy next occurrence without relationship fields', () => {
+test('keeps independent identical recurrences separated by explicit relationships', () => {
+  const first = tx({ id: 'rent-a' });
+  const second = tx({
+    id: 'rent-b',
+    created: '2026-01-01T00:00:00.000Z',
+  });
+  const app = runApp();
+  setDb(app, baseDb({ transactions: [first, second] }));
+
+  app.__finanzasTest.mark('rent-a');
+  let transactions = app.__finanzasTest.db.transactions;
+  const firstChild = transactions.find(t => t.recurrenceParentId === 'rent-a');
+  assert.strictEqual(transactions.length, 3);
+  assert.ok(firstChild);
+  assert.strictEqual(transactions.find(t => t.id === 'rent-a').generatedNextId, firstChild.id);
+  assert.strictEqual(transactions.find(t => t.id === 'rent-b').generatedNextId, undefined);
+
+  app.__finanzasTest.mark('rent-a');
+  app.__finanzasTest.mark('rent-a');
+  transactions = app.__finanzasTest.db.transactions;
+  assert.strictEqual(transactions.length, 3);
+  assert.strictEqual(transactions.find(t => t.id === 'rent-a').generatedNextId, firstChild.id);
+
+  app.__finanzasTest.mark('rent-b');
+  transactions = app.__finanzasTest.db.transactions;
+  const secondChild = transactions.find(t => t.recurrenceParentId === 'rent-b');
+  assert.strictEqual(transactions.length, 4);
+  assert.ok(secondChild);
+  assert.notStrictEqual(secondChild.id, firstChild.id);
+  assert.strictEqual(transactions.find(t => t.id === 'rent-b').generatedNextId, secondChild.id);
+});
+
+// Legacy records without explicit recurrence ids are left untouched because
+// matching amount/date/title/category can also describe independent payments.
+test('does not infer a legacy recurrence from matching financial fields', () => {
   const source = tx({ id: 'legacy-source', status: 'done' });
   const legacyChild = tx({
     id: 'legacy-child',
@@ -200,8 +234,46 @@ test('recognizes legacy next occurrence without relationship fields', () => {
   app.__finanzasTest.mark('legacy-source');
   app.__finanzasTest.mark('legacy-source');
   const transactions = app.__finanzasTest.db.transactions;
-  assert.strictEqual(transactions.length, 2);
-  assert.strictEqual(transactions.find(t => t.id === 'legacy-source').generatedNextId, 'legacy-child');
+  const sourceAfter = transactions.find(t => t.id === 'legacy-source');
+  const untouchedLegacy = transactions.find(t => t.id === 'legacy-child');
+  const generated = transactions.find(t => !['legacy-source', 'legacy-child'].includes(t.id));
+  assert.strictEqual(transactions.length, 3);
+  assert.ok(generated);
+  assert.strictEqual(sourceAfter.generatedNextId, generated.id);
+  assert.strictEqual(generated.recurrenceParentId, 'legacy-source');
+  assert.strictEqual(untouchedLegacy.recurrenceParentId, undefined);
+  assert.strictEqual(untouchedLegacy.generatedNextId, undefined);
+});
+
+test('leaves ambiguous legacy matches unresolved and creates a new explicit child', () => {
+  const source = tx({ id: 'legacy-source', status: 'done' });
+  const legacyChildA = tx({
+    id: 'legacy-child-a',
+    date: '2026-02-28',
+    status: 'pending',
+    created: '2026-02-01T00:00:00.000Z',
+  });
+  const legacyChildB = tx({
+    id: 'legacy-child-b',
+    date: '2026-02-28',
+    status: 'pending',
+    created: '2026-02-02T00:00:00.000Z',
+  });
+  const app = runApp();
+  setDb(app, baseDb({ transactions: [source, legacyChildA, legacyChildB] }));
+  app.__finanzasTest.mark('legacy-source');
+  app.__finanzasTest.mark('legacy-source');
+  const transactions = app.__finanzasTest.db.transactions;
+  const sourceAfter = transactions.find(t => t.id === 'legacy-source');
+  const generated = transactions.find(t => !['legacy-source', 'legacy-child-a', 'legacy-child-b'].includes(t.id));
+  assert.strictEqual(transactions.length, 4);
+  assert.ok(generated);
+  assert.strictEqual(sourceAfter.generatedNextId, generated.id);
+  assert.notStrictEqual(sourceAfter.generatedNextId, 'legacy-child-a');
+  assert.notStrictEqual(sourceAfter.generatedNextId, 'legacy-child-b');
+  assert.strictEqual(generated.recurrenceParentId, 'legacy-source');
+  assert.strictEqual(transactions.find(t => t.id === 'legacy-child-a').recurrenceParentId, undefined);
+  assert.strictEqual(transactions.find(t => t.id === 'legacy-child-b').recurrenceParentId, undefined);
 });
 
 test('editing or postponing a completed recurring source does not create another child', () => {
