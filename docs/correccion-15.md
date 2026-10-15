@@ -25,22 +25,33 @@ No fusiona movimientos entre dispositivos.
 - Cuando ambas versiones cambiaron, la aplicación conserva el conflicto hasta
   que la persona elija. Usar Drive requiere dos confirmaciones y reemplaza
   los datos de este navegador. Cancelar conserva los datos locales y deja
-  Drive intacto. Una reducción de colecciones remotas también requiere una
-  elección explícita.
+  Drive intacto. Una base ausente o que no corresponda a la copia local actual
+  no autoriza descargas automáticas.
+- Aunque la base coincida, solo se descarga automáticamente cuando cada
+  colección remota conserva en el mismo orden todos los registros locales con
+  sus campos intactos y los demás datos locales también coinciden. Se permiten
+  registros nuevos al final de las colecciones. Un importe, identificador,
+  saldo, recurrencia o categoría modificado, incluso con el mismo número de
+  registros, requiere una elección explícita. El conteo por sí solo no
+  demuestra que una copia conserve los datos.
 - Antes de aplicar una descarga o subir una copia se vuelven a comprobar las
   versiones. Después de subir se descarga el archivo para verificarlo. Si la
   copia local no se puede leer, no se sube nada.
 - El hash de base sigue en `mis-finanzas-google-drive-base-v1`. Se reconocen
-  hashes anteriores; los nuevos se calculan sobre los datos normalizados sin
-  los ajustes de conexión propios del dispositivo. Así, recuperar una copia
-  antigua sin ajustes no provoca conflictos repetidos. Las configuraciones
-  locales de la sincronización manual se conservan al descargar de Drive.
+  hashes anteriores cuando coinciden con la copia local actual; los nuevos se
+  calculan sobre los datos normalizados sin los ajustes de conexión propios
+  del dispositivo. La coincidencia de un hash antiguo no evita la comparación
+  completa de datos antes de descargar. Las configuraciones locales, incluidos
+  los ajustes que cambien durante la lectura de Drive, se conservan.
 
 ## Límites
 
 - Las copias anteriores permanecen en Drive. La aplicación usa la más reciente;
   no interpreta ni combina cambios que solo estén en las anteriores. Exportar
   JSON antes de resolver un conflicto sigue siendo recomendable.
+- Una inserción remota antes de un registro existente, un reordenamiento o una
+  edición legítima también pedirán confirmación. Esta decisión conservadora
+  evita tratar cambios de contenido como ampliaciones inequívocas.
 - Los archivos antiguos que carecen de cuentas, movimientos o propiedades
   esenciales no se pueden recuperar con certeza y se rechazan. No se inventan
   importes, estados ni relaciones de recurrencia.

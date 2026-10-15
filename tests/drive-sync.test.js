@@ -90,6 +90,7 @@ function app(local, service, choices = [], storage = new Storage({ [KEY]: JSON.s
   const elements = new Map();
   const get = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
   const alerts = [];
+  const confirmations = [];
   const context = {
     console, localStorage: storage, fetch: service.fetch, crypto: webcrypto,
     TextEncoder, Blob, URL, Intl,
@@ -98,7 +99,7 @@ function app(local, service, choices = [], storage = new Storage({ [KEY]: JSON.s
       getElementById: get, querySelector: get, querySelectorAll: () => [], addEventListener() {} },
     window: { addEventListener() {}, dispatchEvent() {} },
     Event: function Event(type) { this.type = type; },
-    alert: message => alerts.push(message), confirm: () => choices.shift() ?? false,
+    alert: message => alerts.push(message), confirm: message => { confirmations.push(message); return choices.shift() ?? false; },
     prompt: () => '', setTimeout: () => 1, clearTimeout() {}, setInterval() {},
   };
   vm.createContext(context);
@@ -109,7 +110,7 @@ globalThis.__drive = { sync, normalizeRemote, remote, hash, dataHash, snapshot,
   get conflict() { return conflict; } };
 })();`), context);
   context.__drive.setToken();
-  return { api: context.__drive, storage, alerts };
+  return { api: context.__drive, storage, alerts, confirmations };
 }
 
 async function test(name, run) {
@@ -120,17 +121,18 @@ async function test(name, run) {
 async function main() {
   await test('descarga válida y conservación de cuentas, movimientos, deudas, metas y recurrencias', async () => {
     const local = data();
-    const remote = data({ accounts: [{ id: 'banco', name: 'Banco ficticio', type: 'bank', opening: 100 }],
+    const remote = data({ accounts: [...local.accounts, { id: 'banco', name: 'Banco ficticio', type: 'bank', opening: 100 }],
       transactions: [data().transactions[0], { ...data().transactions[0], id: 'mov-2',
         recurrenceParentId: 'mov-1', recurrenceRootId: 'mov-1', generatedNextId: '' }],
-      debts: [{ id: 'deuda', name: 'Ejemplo', balance: 40 }],
-      goals: [{ id: 'meta', name: 'Ejemplo', target: 60 }] });
+      debts: [...local.debts, { id: 'deuda-2', name: 'Otro ejemplo', balance: 40 }],
+      goals: [...local.goals, { id: 'meta-2', name: 'Otro ejemplo', target: 60 }] });
     const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
     const instance = app(local, service);
     instance.storage.setItem(BASE, await instance.api.hash(instance.api.snapshot()));
     await instance.api.sync();
     const saved = JSON.parse(instance.storage.getItem(KEY));
-    assert.equal(saved.accounts[0].id, 'banco', JSON.stringify({ alerts: instance.alerts, calls: service.calls, base: instance.storage.getItem(BASE), conflict: instance.api.conflict }));
+    assert.equal(saved.accounts[1].id, 'banco');
+    assert.deepEqual(saved.transactions[0], local.transactions[0]);
     assert.equal(saved.transactions[1].recurrenceParentId, 'mov-1');
     assert.deepEqual(saved.debts, remote.debts);
     assert.deepEqual(saved.goals, remote.goals);
@@ -195,15 +197,40 @@ async function main() {
   });
 
   await test('conflicto confirmado utiliza Drive y conserva ajustes locales heredados', async () => {
-    const local = data({ revision: 2, settings: { cloudUrl: 'https://example.invalid', cloudKey: 'ficticia', syncId: 'ejemplo', syncSecret: 'ficticio' } });
-    const remote = data({ revision: 3 });
+    const local = data({ revision: 2, settings: { cloudUrl: 'https://example.invalid', cloudKey: 'ficticia', syncId: 'ejemplo', syncSecret: 'ficticio', lastSync: 'registro-local', preference: 'local' } });
+    const remote = data({ revision: 3, settings: { ...data().settings, lastSync: 'registro-remoto', preference: 'remota' } });
     const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
     const instance = app(local, service, [true, true]);
     await instance.api.sync(true);
     const saved = JSON.parse(instance.storage.getItem(KEY));
     assert.equal(saved.revision, 3);
     assert.equal(saved.settings.syncId, 'ejemplo');
+    assert.equal(saved.settings.lastSync, 'registro-local');
+    assert.equal(saved.settings.preference, 'local');
     assert.equal(service.copies[0].body, JSON.stringify(remote));
+  });
+
+  await test('preserva ajustes locales modificados mientras se descarga Drive', async () => {
+    const local = data();
+    const remote = data({ revision: 3 });
+    const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
+    let storage;
+    const originalFetch = service.fetch;
+    service.fetch = async (url, options) => {
+      if (url.includes('?alt=media') && storage) {
+        const current = JSON.parse(storage.getItem(KEY));
+        current.settings.syncId = 'ajuste-ficticio-nuevo';
+        storage.setItem(KEY, JSON.stringify(current));
+      }
+      return originalFetch(url, options);
+    };
+    const instance = app(local, service);
+    storage = instance.storage;
+    instance.storage.setItem(BASE, await instance.api.dataHash(instance.api.snapshot()));
+    await instance.api.sync();
+    const saved = JSON.parse(instance.storage.getItem(KEY));
+    assert.equal(saved.revision, 3);
+    assert.equal(saved.settings.syncId, 'ajuste-ficticio-nuevo');
   });
 
   await test('selecciona la copia más reciente aunque la API entregue primero la antigua', async () => {
@@ -224,6 +251,68 @@ async function main() {
     const local = data();
     const empty = data({ revision: 2, transactions: [], debts: [], goals: [] });
     const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(empty) }]);
+    const instance = app(local, service);
+    instance.storage.setItem(BASE, await instance.api.hash(instance.api.snapshot()));
+    await instance.api.sync();
+    assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
+    assert.equal(instance.api.conflict, true);
+  });
+
+  await test('no descarga automáticamente movimientos con el mismo conteo e importe o ID diferente', async () => {
+    for (const transaction of [
+      { ...data().transactions[0], amount: 99 },
+      { ...data().transactions[0], id: 'mov-ajeno' },
+      { ...data().transactions[0], generatedNextId: 'otra-ocurrencia' },
+    ]) {
+      const local = data();
+      const remote = data({ revision: 3, transactions: [transaction] });
+      const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
+      const instance = app(local, service);
+      instance.storage.setItem(BASE, await instance.api.dataHash(instance.api.snapshot()));
+      await instance.api.sync();
+      assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
+      assert.equal(instance.api.conflict, true);
+      assert.equal(service.copies[0].body, JSON.stringify(remote));
+      await instance.api.sync(true);
+      assert.equal(instance.confirmations.length, 1);
+      assert.match(instance.confirmations[0], /REEMPLAZAR los datos locales/);
+      assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
+      assert.equal(service.copies[0].body, JSON.stringify(remote));
+    }
+  });
+
+  await test('no descarga eliminaciones remotas aunque se agreguen otros registros', async () => {
+    const local = data();
+    const remote = data({ revision: 3, transactions: [
+      { ...local.transactions[0], id: 'mov-nuevo-1' },
+      { ...local.transactions[0], id: 'mov-nuevo-2' },
+    ] });
+    const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
+    const instance = app(local, service);
+    instance.storage.setItem(BASE, await instance.api.hash(instance.api.snapshot()));
+    await instance.api.sync();
+    assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
+    assert.equal(instance.api.conflict, true);
+  });
+
+  await test('una base ausente o antigua no autoriza una descarga divergente', async () => {
+    for (const base of [null, '0'.repeat(64), 'hash-de-otra-copia']) {
+      const local = data();
+      const remote = data({ revision: 3, transactions: [{ ...local.transactions[0], amount: 99 }] });
+      const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
+      const instance = app(local, service);
+      if (base !== null) instance.storage.setItem(BASE, base);
+      await instance.api.sync();
+      assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
+      assert.equal(instance.storage.getItem(BASE), base);
+      assert.equal(instance.api.conflict, true);
+    }
+  });
+
+  await test('una base antigua coincidente tampoco permite sustituciones del mismo tamaño', async () => {
+    const local = data();
+    const remote = data({ revision: 3, accounts: [{ ...local.accounts[0], opening: 999 }] });
+    const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
     const instance = app(local, service);
     instance.storage.setItem(BASE, await instance.api.hash(instance.api.snapshot()));
     await instance.api.sync();

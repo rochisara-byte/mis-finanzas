@@ -310,10 +310,19 @@ async function remote(){
    finally{busy=false}
  }
 async function upload(data){const json=JSON.stringify(data);if(!driveFileId){const boundary='finanzas'+Date.now();const body='--'+boundary+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+JSON.stringify({name:FILE,parents:['appDataFolder'],mimeType:'application/json'})+'\r\n--'+boundary+'\r\nContent-Type: application/json\r\n\r\n'+json+'\r\n--'+boundary+'--';const r=await api('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',{method:'POST',headers:{'Content-Type':'multipart/related; boundary='+boundary},body});driveFileId=(await r.json()).id}else await api('https://www.googleapis.com/upload/drive/v3/files/'+encodeURIComponent(driveFileId)+'?uploadType=media',{method:'PATCH',headers:{'Content-Type':'application/json'},body:json})}
-function applyRemote(data){const copy=normalizeRemote(data),localSettings=db.settings||{};copy.settings={...copy.settings,cloudUrl:localSettings.cloudUrl||'',cloudKey:localSettings.cloudKey||'',syncId:localSettings.syncId||'',syncSecret:localSettings.syncSecret||''};localStorage.setItem(KEY,JSON.stringify(copy));db=copy;close();render();window.dispatchEvent(new Event('finanzas-drive-loaded'))}
+function applyRemote(data){const copy=normalizeRemote(data),stored=JSON.parse(localStorage.getItem(KEY)||'{}'),localSettings=record(stored.settings)?stored.settings:db.settings||{};copy.settings={...copy.settings,...localSettings};localStorage.setItem(KEY,JSON.stringify(copy));db=copy;close();render();window.dispatchEvent(new Event('finanzas-drive-loaded'))}
 async function localUnchanged(expected){if(await dataHash(snapshot())!==expected)throw Error('Los datos locales cambiaron durante la sincronización. Reintenta para evitar una sobrescritura.');}
 async function remoteUnchanged(expected){const current=await remote();if((current?await dataHash(current):null)!==expected)throw Error('La copia de Drive cambió durante la sincronización. Reintenta y revisa los cambios.');}
-const reduced=(local,remote)=>['accounts','transactions','lists','budgets','goals','debts'].some(key=>(remote[key]?.length||0)<(local[key]?.length||0));
+const stableJSON=value=>JSON.stringify(value,(key,item)=>record(item)?Object.fromEntries(Object.keys(item).sort().map(k=>[k,item[k]])):item);
+function remoteRetainsLocal(local,remote){
+ const before=normalizeRemote(local),after=normalizeRemote(remote);
+ for(const key of ['settings','device','revision','updatedAt']){delete before[key];delete after[key]}
+ return Object.keys(before).every(key=>{
+  if(!(key in after))return false;
+  const oldValue=before[key],newValue=after[key];
+  return Array.isArray(oldValue)?Array.isArray(newValue)&&newValue.length>=oldValue.length&&oldValue.every((item,i)=>stableJSON(item)===stableJSON(newValue[i])):stableJSON(oldValue)===stableJSON(newValue);
+ });
+}
 async function sync(interactive=false){
  if(busy||!cfg().clientId)return;
  if(!navigator.onLine){pendingStatus();return}
@@ -326,7 +335,7 @@ async function sync(interactive=false){
   if(!r){await localUnchanged(lh);await remoteUnchanged(null);await upload(local);if(await dataHash(await readFile(driveFileId))!==lh)throw Error('La copia subida no pasó la verificación de lectura.');localStorage.setItem(BASE,lh)}
   else if(lh===rh){await localUnchanged(lh);localStorage.setItem(BASE,lh)}
   else if(remoteBase){await localUnchanged(lh);await remoteUnchanged(rh);await upload(local);if(await dataHash(await readFile(driveFileId))!==lh)throw Error('La copia subida no pasó la verificación de lectura.');localStorage.setItem(BASE,lh)}
-  else if(localBase&&!reduced(local,r)){await localUnchanged(lh);await remoteUnchanged(rh);applyRemote(r);localStorage.setItem(BASE,rh)}
+  else if(localBase&&remoteRetainsLocal(local,r)){await localUnchanged(lh);await remoteUnchanged(rh);applyRemote(r);localStorage.setItem(BASE,rh)}
   else{
    conflict=true;
    if(!interactive){setStatus('Drive · Conflicto pendiente','problem');return}
