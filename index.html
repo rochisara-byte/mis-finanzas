@@ -203,7 +203,7 @@ if('serviceWorker'in navigator&&location.protocol!=='file:')navigator.serviceWor
 (()=>{'use strict';
 const CFG='mis-finanzas-google-drive-config-v1',BASE='mis-finanzas-google-drive-base-v1';
 const FILE='mis-finanzas-sync-v1.json',SCOPE='https://www.googleapis.com/auth/drive.appdata';
-let token='',tokenExpires=0,client=null,busy=false,timer=0,driveFileId='',lastStatus='Drive · Requiere conexión',lastKind='problem',pending=false,conflict=false,silentAttempted=false,connecting=false,authInFlight=null;
+let token='',tokenExpires=0,client=null,busy=false,timer=0,driveFileId='',lastStatus='Drive · Requiere conexión',lastKind='problem',pending=false,conflict=false,connecting=false,authInFlight=null;
 const DEFAULT_CLIENT_ID='977076702377-qfvfg50kiajoc50s65kuf88m3i7gqkd6.apps.googleusercontent.com';
 const cfg=()=>{try{return {clientId:DEFAULT_CLIENT_ID,...JSON.parse(localStorage.getItem(CFG)||'{}')}}catch{return {clientId:DEFAULT_CLIENT_ID}}};
 const config=v=>localStorage.setItem(CFG,JSON.stringify(v));
@@ -214,12 +214,12 @@ const hasToken=()=>!!token&&Date.now()<tokenExpires-60000;
 const setStatus=(message,kind='')=>{lastStatus=message;lastKind=kind;const b=document.getElementById('driveSyncButton');if(b){b.className=kind;b.querySelector('.sync-label').textContent=message}const sb=document.getElementById('openDriveSettings');if(sb){sb.querySelector('.drive-settings-label').textContent=message;sb.classList.toggle('connected',kind==='connected');sb.classList.toggle('problem',kind==='problem')}};
  const pendingStatus=()=>{const message=!navigator.onLine?'Drive · Sin internet':conflict?'Drive · Conflicto pendiente':connecting?'Drive · Conectando':!hasToken()?'Drive · Requiere conexión':'Drive · Pendiente';setStatus(message,message==='Drive · Conectando'?'':'problem')};
  const refreshPending=async()=>{try{const local=snapshot(),base=localStorage.getItem(BASE);pending=!!base&&await dataHash(local)!==base&&await hash(local)!==base;if(!token||Date.now()>=tokenExpires-60000)pendingStatus()}catch(e){console.warn('Estado de sincronización:',e)}};
-const button=document.createElement('button');button.id='driveSyncButton';button.type='button';button.innerHTML='<span class="sync-dot"></span><span class="sync-label">Drive · Requiere conexión</span>';button.onclick=async()=>{if(busy)return;if(hasToken()){await sync(true);return}try{await authorize(true);await sync(true)}catch(e){pendingStatus();alert('No se pudo conectar: '+e.message+'\nPuedes revisar la configuración de Google Drive.');showPanel()}};(document.querySelector('.top-actions')||document.body).prepend(button);
+const button=document.createElement('button');button.id='driveSyncButton';button.type='button';button.innerHTML='<span class="sync-dot"></span><span class="sync-label">Drive · Requiere conexión</span>';button.onclick=async()=>{if(busy)return;if(hasToken()){await sync(true);return}try{await authorize();await sync(true)}catch(e){pendingStatus();alert('No se pudo conectar: '+e.message+'\nPuedes revisar la configuración de Google Drive.');showPanel()}};(document.querySelector('.top-actions')||document.body).prepend(button);
 const validId=s=>/^\d+-[a-z0-9_-]+\.apps\.googleusercontent\.com$/i.test(s);
 const oauthReady=()=>new Promise((resolve,reject)=>{let tries=0;const tick=()=>{if(window.google?.accounts?.oauth2)return resolve();if(++tries>50)return reject(Error('No se pudo cargar Google Identity Services. Comprueba internet.'));setTimeout(tick,150)};tick()});
-async function authorize(interactive=true){
+async function authorize(){
  if(hasToken())return true;
- if(authInFlight){try{await authInFlight}catch(e){if(!interactive)throw e}if(hasToken())return true}
+ if(authInFlight)return authInFlight;
  const attempt=(async()=>{
   const id=cfg().clientId;if(!validId(id||''))throw Error('Configura primero el ID de cliente OAuth de Google.');
   connecting=true;setStatus('Drive · Conectando');
@@ -232,7 +232,7 @@ async function authorize(interactive=true){
     client=google.accounts.oauth2.initTokenClient({client_id:id,scope:SCOPE,
      callback:r=>{if(finished)return;if(r.error||!r.access_token)return finish(Error(r.error||'Google no devolvió un token de acceso.'));if(cfg().clientId!==id)return finish(Error('Cambió la configuración de Google Drive.'));token=r.access_token;tokenExpires=Date.now()+(Number(r.expires_in)||3500)*1000;finish()},
      error_callback:e=>finish(Error(e?.type||'No se pudo abrir la autorización de Google.'))});
-    client.requestAccessToken({prompt:interactive?'select_account':'none'});
+    client.requestAccessToken({prompt:'select_account'});
    }catch(e){finish(e)}
   });
  })();
@@ -301,7 +301,7 @@ async function remote(){
    try{
      const data=snapshot();
      if(!Array.isArray(data.accounts)||!Array.isArray(data.transactions))throw Error('Los datos locales no tienen el formato esperado.');
-     await authorize(true);
+     await authorize();
      // Consultar siempre la primera página: al eliminar archivos cambian las páginas.
      const q=encodeURIComponent("name = '"+FILE+"' and trashed = false");
      const listUrl='https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q='+q+'&fields=nextPageToken,files(id,name)&page_size=100';
@@ -344,7 +344,7 @@ async function sync(interactive=false){
  if(busy||!cfg().clientId)return;
  if(!navigator.onLine){pendingStatus();return}
  if(conflict&&!interactive){pendingStatus();return}
- if(!hasToken()){if(!interactive){pendingStatus();return}await authorize(true)}
+ if(!hasToken()){if(!interactive){pendingStatus();return}await authorize()}
  busy=true;setStatus('Drive · Sincronizando','connected');
  let backupName='',uploadStarted=false;
  try{
@@ -378,29 +378,16 @@ async function sync(interactive=false){
  }catch(e){if(conflict)pendingStatus();else setStatus(pending?'Drive · Pendiente':'Drive · Revisar','problem');if(interactive)alert('No se pudo sincronizar: '+e.message+(backupName?'\nEl respaldo remoto '+backupName+' permanece en Drive.':'')+(uploadStarted?'\nEl estado del archivo principal requiere revisión.':''));console.warn('Sincronización Drive:',e)}
  finally{busy=false}
 }
-// Intento no interactivo, solo una vez por apertura. Google puede exigir un gesto del usuario.
-async function reconnectSilently(){
- if(silentAttempted||!navigator.onLine||document.hidden||busy||hasToken())return;
- silentAttempted=true;
- try{
-  await authorize(false);
-  await sync(false);
- }catch(e){
-  console.info('Drive: reconexión silenciosa no disponible:',e?.message||e);
-  pendingStatus();
- }
-}
 function schedule(){clearTimeout(timer);timer=setTimeout(()=>sync(false),1800)}
 window.addEventListener('finanzas-local-save',()=>{pending=true;if(!busy)pendingStatus();schedule()});
-window.addEventListener('online',()=>{if(!silentAttempted&&!hasToken())return reconnectSilently();schedule()});
+window.addEventListener('online',()=>{if(hasToken())schedule();else pendingStatus()});
 window.addEventListener('offline',()=>{if(!busy)pendingStatus()});
-document.addEventListener('visibilitychange',()=>{if(!document.hidden){if(!silentAttempted&&!hasToken())return reconnectSilently();schedule()}});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){if(hasToken())schedule();else pendingStatus()}});
 setInterval(()=>{if(document.hidden||!navigator.onLine)return;if(hasToken())schedule();else if(!busy&&!connecting)pendingStatus()},60000);
 refreshPending();
-window.addEventListener('finanzas-refresh-drive-status',()=>setStatus(lastStatus,lastKind));window.addEventListener('finanzas-open-drive-panel',()=>showPanel());function showPanel(){const c=cfg();open(`<div class="between"><h2>Google Drive <small style="font-size:11px;color:#667085">Corrección 7 · 10/10/2026</small></h2><button class="iconbtn" data-action="close">✕</button></div><div class="drive-box"><p>Sincroniza tus datos privados de Mis Finanzas con tu Google Drive. Solo se solicita acceso a los datos privados de esta aplicación, no a tus otros archivos.</p><label class="field">ID de cliente OAuth (aplicación web)<input id="driveClientId" type="text" placeholder="123456789-...apps.googleusercontent.com" value="${esc(c.clientId||'')}"></label><p>En Google Cloud configura una pantalla de consentimiento y un cliente OAuth tipo <b>Aplicación web</b>. Agrega el origen HTTPS donde publiques la app en <b>Orígenes autorizados de JavaScript</b>. Si está en modo pruebas, agrega tu correo como usuario de prueba.</p><button class="secondary" id="driveSaveConfig">Guardar ID</button><button class="primary" id="driveConnect">Conectar Google y sincronizar</button><button class="secondary" id="driveSyncNow">Sincronizar ahora</button><button class="secondary" id="driveReset" style="border:1px solid #dc8791;color:#ad3c4c;background:#fff8f8">Reiniciar y verificar copia</button><p class="danger-text">Solo si no necesitas conservar la copia anterior de Mis Finanzas en Drive. Requiere doble confirmación.</p><p>Estado: <b>${esc(lastStatus)}</b>. Los datos se guardan también en este navegador. Si dos dispositivos cambian los datos a la vez, se pedirá elegir una versión para evitar sobrescrituras silenciosas.</p><p class="danger-text">No abras el HTML directamente desde Descargas para autenticarte: publícalo en HTTPS. Nunca compartas secretos OAuth ni contraseñas.</p></div>`);document.getElementById('driveSaveConfig').onclick=()=>{const id=document.getElementById('driveClientId').value.trim();if(!validId(id))return alert('ID de cliente OAuth no válido.');if(id!==cfg().clientId){token='';client=null;localStorage.removeItem(BASE)}config({clientId:id});alert('ID guardado en este navegador.')};document.getElementById('driveConnect').onclick=async()=>{try{const id=document.getElementById('driveClientId').value.trim();if(!validId(id))return alert('Primero introduce un ID OAuth válido.');if(id!==cfg().clientId){token='';client=null;localStorage.removeItem(BASE)}config({clientId:id});await authorize(true);close();await sync(true)}catch(e){alert('No se pudo conectar: '+e.message)}};document.getElementById('driveSyncNow').onclick=async()=>{close();try{await sync(true)}catch(e){alert(e.message)}};document.getElementById('driveReset').onclick=resetRemote}
+window.addEventListener('finanzas-refresh-drive-status',()=>setStatus(lastStatus,lastKind));window.addEventListener('finanzas-open-drive-panel',()=>showPanel());function showPanel(){const c=cfg();open(`<div class="between"><h2>Google Drive <small style="font-size:11px;color:#667085">Corrección 7 · 10/10/2026</small></h2><button class="iconbtn" data-action="close">✕</button></div><div class="drive-box"><p>Sincroniza tus datos privados de Mis Finanzas con tu Google Drive. Solo se solicita acceso a los datos privados de esta aplicación, no a tus otros archivos.</p><label class="field">ID de cliente OAuth (aplicación web)<input id="driveClientId" type="text" placeholder="123456789-...apps.googleusercontent.com" value="${esc(c.clientId||'')}"></label><p>En Google Cloud configura una pantalla de consentimiento y un cliente OAuth tipo <b>Aplicación web</b>. Agrega el origen HTTPS donde publiques la app en <b>Orígenes autorizados de JavaScript</b>. Si está en modo pruebas, agrega tu correo como usuario de prueba.</p><button class="secondary" id="driveSaveConfig">Guardar ID</button><button class="primary" id="driveConnect">Conectar Google y sincronizar</button><button class="secondary" id="driveSyncNow">Sincronizar ahora</button><button class="secondary" id="driveReset" style="border:1px solid #dc8791;color:#ad3c4c;background:#fff8f8">Reiniciar y verificar copia</button><p class="danger-text">Solo si no necesitas conservar la copia anterior de Mis Finanzas en Drive. Requiere doble confirmación.</p><p>Estado: <b>${esc(lastStatus)}</b>. Los datos se guardan también en este navegador. Si dos dispositivos cambian los datos a la vez, se pedirá elegir una versión para evitar sobrescrituras silenciosas.</p><p class="danger-text">No abras el HTML directamente desde Descargas para autenticarte: publícalo en HTTPS. Nunca compartas secretos OAuth ni contraseñas.</p></div>`);document.getElementById('driveSaveConfig').onclick=()=>{const id=document.getElementById('driveClientId').value.trim();if(!validId(id))return alert('ID de cliente OAuth no válido.');if(id!==cfg().clientId){token='';client=null;localStorage.removeItem(BASE)}config({clientId:id});alert('ID guardado en este navegador.')};document.getElementById('driveConnect').onclick=async()=>{try{const id=document.getElementById('driveClientId').value.trim();if(!validId(id))return alert('Primero introduce un ID OAuth válido.');if(id!==cfg().clientId){token='';client=null;localStorage.removeItem(BASE)}config({clientId:id});await authorize();close();await sync(true)}catch(e){alert('No se pudo conectar: '+e.message)}};document.getElementById('driveSyncNow').onclick=async()=>{close();try{await sync(true)}catch(e){alert(e.message)}};document.getElementById('driveReset').onclick=resetRemote}
 if(cfg().clientId){
   pendingStatus();
-  setTimeout(reconnectSilently,0);
 }
 })();
 </script>
