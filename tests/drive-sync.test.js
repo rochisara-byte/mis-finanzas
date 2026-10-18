@@ -103,6 +103,7 @@ function app(local, service, choices = [], storage = new Storage({ [KEY]: JSON.s
   const confirmations = [];
   const events = {};
   const timers = [];
+  const intervals = [];
   const requests = [];
   const google = auth && { accounts: { oauth2: { initTokenClient(options) {
     return { requestAccessToken(request) {
@@ -121,18 +122,18 @@ function app(local, service, choices = [], storage = new Storage({ [KEY]: JSON.s
     window: { google, addEventListener(name, fn) { events[name] = fn; }, dispatchEvent() {} }, google,
     Event: function Event(type) { this.type = type; },
     alert: message => alerts.push(message), confirm: message => { confirmations.push(message); return choices.shift() ?? false; },
-    prompt: () => '', setTimeout: (fn, delay) => { timers.push({ fn, delay }); return timers.length; }, clearTimeout() {}, setInterval() {},
+    prompt: () => '', setTimeout: (fn, delay) => { timers.push({ fn, delay }); return timers.length; }, clearTimeout() {}, setInterval: fn => intervals.push(fn),
   };
   vm.createContext(context);
   vm.runInContext(scripts[0], context);
   vm.runInContext(scripts[1].replace(/\n\}\)\(\);\s*$/, `
-globalThis.__drive = { sync, authorize, reconnectSilently, normalizeRemote, remote, hash, dataHash, snapshot,
+globalThis.__drive = { sync, authorize, normalizeRemote, remote, hash, dataHash, snapshot,
   setToken() { token = 'ficticio'; tokenExpires = Date.now() + 600000; },
   expireToken() { tokenExpires = 0; },
-  get conflict() { return conflict; }, get status() { return lastStatus; } };
+  get conflict() { return conflict; }, get status() { return lastStatus; }, get button() { return button; } };
 })();`), context);
   if (!auth) context.__drive.setToken();
-  return { api: context.__drive, storage, alerts, confirmations, get, events, timers, requests, context };
+  return { api: context.__drive, storage, alerts, confirmations, get, events, timers, intervals, requests, context };
 }
 
 async function resolve(instance, choice) {
@@ -550,90 +551,98 @@ async function main() {
     assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
   });
 
-  await test('recarga recupera autorización sin pantalla y queda al día si las copias coinciden', async () => {
+  await test('carga y recarga no solicitan autorización ni leen Drive automáticamente', async () => {
+    const local = data();
+    const storage = new Storage({ [KEY]: JSON.stringify(local) });
+    const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(local) }]);
+    const first = app(local, service, [], storage, true, { result: 'success' });
+    assert.equal(first.api.status, 'Drive · Requiere conexión');
+    assert.equal(first.requests.length, 0);
+    assert.equal(first.timers.some(timer => timer.delay === 0), false);
+    const reloaded = app(local, service, [], storage, true, { result: 'success' });
+    assert.equal(reloaded.api.status, 'Drive · Requiere conexión');
+    assert.equal(reloaded.requests.length, 0);
+    assert.equal(service.calls.length, 0);
+    assert.equal(storage.getItem(KEY), JSON.stringify(local));
+  });
+
+  await test('online, visibilidad, guardado y temporizador no abren autorización sin token', async () => {
+    const local = data();
+    const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(local) }]);
+    const instance = app(local, service, [], undefined, false, { result: 'success' });
+    instance.context.navigator.onLine = true;
+    instance.events.online();
+    instance.context.document.hidden = true;
+    instance.events.visibilitychange();
+    instance.context.document.hidden = false;
+    instance.events.visibilitychange();
+    instance.events['finanzas-local-save']();
+    for (const timer of instance.timers) timer.fn();
+    for (const interval of instance.intervals) interval();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(instance.requests.length, 0);
+    assert.equal(service.calls.length, 0);
+    assert.equal(instance.api.status, 'Drive · Requiere conexión');
+  });
+
+  await test('el botón manual conecta y conserva el token válido en memoria', async () => {
     const local = data();
     const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(local) }]);
     const instance = app(local, service, [], undefined, true, { result: 'success' });
-    await instance.timers.find(timer => timer.delay === 0).fn();
-    await instance.api.reconnectSilently();
-    assert.equal(instance.api.status, 'Drive · Al día');
+    await instance.api.button.onclick();
     assert.equal(instance.requests.length, 1);
-    assert.equal(instance.requests[0].prompt, 'none');
-    assert.equal(service.calls.filter(call => call.method !== 'GET').length, 0);
+    assert.equal(instance.requests[0].prompt, 'select_account');
+    assert.equal(instance.api.status, 'Drive · Al día');
+    await instance.api.button.onclick();
+    assert.equal(instance.requests.length, 1);
     assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
     assert.equal(instance.storage.getItem('mis-finanzas-google-drive-token'), null);
   });
 
-  await test('autorización denegada o interrumpida requiere conexión sin modificar copias', async () => {
+  await test('autorización manual denegada o interrumpida no altera las copias', async () => {
     for (const result of ['denied', 'interrupted']) {
       const local = data();
       const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(local) }]);
       const instance = app(local, service, [], undefined, true, { result });
-      await instance.api.reconnectSilently();
+      await instance.api.button.onclick();
       assert.equal(instance.api.status, 'Drive · Requiere conexión');
-      assert.equal(instance.requests[0].prompt, 'none');
-      assert.equal(instance.alerts.length, 0);
+      assert.equal(instance.requests[0].prompt, 'select_account');
       assert.equal(service.calls.length, 0);
       assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
-      await instance.api.reconnectSilently();
-      assert.equal(instance.requests.length, 1);
     }
   });
 
-  await test('conexión manual solicita cuenta solo después de la acción explícita', async () => {
-    const instance = app(data(), drive([]), [], undefined, true, { result: 'success' });
-    assert.equal(instance.requests.length, 0);
-    await instance.api.authorize(true);
-    assert.equal(instance.requests.length, 1);
-    assert.equal(instance.requests[0].prompt, 'select_account');
-  });
-
-  await test('token caducado no se reutiliza ni dispara otra autorización automática', async () => {
+  await test('token caducado no se renueva sin una nueva acción manual', async () => {
     const local = data();
-    const instance = app(local, drive([]), [], undefined, true, { result: 'success', expires_in: 1 });
-    await instance.api.reconnectSilently();
-    assert.equal(instance.api.status, 'Drive · Requiere conexión');
-    await instance.api.reconnectSilently();
-    assert.equal(instance.requests.length, 1);
-  });
-
-  await test('sesión caducada tras sincronizar muestra conexión requerida', async () => {
-    const local = data();
-    const instance = app(local, drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(local) }]), [], undefined, true, { result: 'success' });
-    await instance.api.reconnectSilently();
-    assert.equal(instance.api.status, 'Drive · Al día');
+    const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(local) }]);
+    const instance = app(local, service, [], undefined, true, { result: 'success' });
+    await instance.api.button.onclick();
     instance.api.expireToken();
-    await instance.api.sync(false);
+    instance.events.online();
+    instance.events.visibilitychange();
+    for (const interval of instance.intervals) interval();
     assert.equal(instance.api.status, 'Drive · Requiere conexión');
     assert.equal(instance.requests.length, 1);
   });
 
-  await test('con autorización recuperada muestra pendiente al guardar hasta sincronizar', async () => {
+  await test('guardado con token vigente queda pendiente hasta sincronizar', async () => {
     const local = data();
     const instance = app(local, drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(local) }]), [], undefined, true, { result: 'success' });
-    await instance.api.reconnectSilently();
+    await instance.api.button.onclick();
     instance.events['finanzas-local-save']();
     assert.equal(instance.api.status, 'Drive · Pendiente');
   });
 
-  await test('arranque sin conexión espera online antes del único intento silencioso', async () => {
-    const local = data();
-    const instance = app(local, drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(local) }]), [], undefined, false, { result: 'success' });
-    await instance.api.reconnectSilently();
-    assert.equal(instance.requests.length, 0);
-    instance.context.navigator.onLine = true;
-    await instance.events.online();
-    assert.equal(instance.requests.length, 1);
-    assert.equal(instance.api.status, 'Drive · Al día');
-  });
-
-  await test('conflicto permanece pendiente tras reconexión silenciosa', async () => {
+  await test('conexión manual mantiene el conflicto y no reemplaza copias divergentes', async () => {
     const local = data();
     const remote = data({ transactions: [{ ...local.transactions[0], amount: 15 }] });
     const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
     const instance = app(local, service, [], undefined, true, { result: 'success' });
-    await instance.api.reconnectSilently();
-    assert.equal(instance.api.status, 'Drive · Conflicto pendiente');
+    const operation = instance.api.button.onclick();
+    for (let attempt = 0; attempt < 200 && !instance.get('driveConflictCancel').onclick; attempt++) await new Promise(done => setTimeout(done, 1));
+    assert.equal(typeof instance.get('driveConflictCancel').onclick, 'function');
+    instance.get('driveConflictCancel').onclick();
+    await operation;
     assert.equal(instance.api.conflict, true);
     assert.equal(service.calls.filter(call => call.method !== 'GET').length, 0);
     assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));

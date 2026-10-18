@@ -1,5 +1,9 @@
 # Corrección 17: reconexión de Google Drive
 
+> Este comportamiento de autorización automática queda sustituido por la
+> [Corrección 17.1](correccion-17-1.md): `requestAccessToken()` puede abrir una
+> ventana emergente incluso con `prompt: 'none'` y ya no se llama al iniciar.
+
 Al abrir o recargar la aplicación, se hace como máximo un intento de obtener
 un token de Google Identity Services sin mostrar selección de cuenta ni
 consentimiento (`prompt: 'none'`). Se espera a que GIS cargue y se limita la
