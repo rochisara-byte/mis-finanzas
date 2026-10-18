@@ -96,31 +96,43 @@ function drive(files = []) {
   return service;
 }
 
-function app(local, service, choices = [], storage = new Storage({ [KEY]: JSON.stringify(local) }), online = true) {
+function app(local, service, choices = [], storage = new Storage({ [KEY]: JSON.stringify(local) }), online = true, auth = null) {
   const elements = new Map();
   const get = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
   const alerts = [];
   const confirmations = [];
+  const events = {};
+  const timers = [];
+  const requests = [];
+  const google = auth && { accounts: { oauth2: { initTokenClient(options) {
+    return { requestAccessToken(request) {
+      requests.push(request);
+      if (auth.result === 'success') options.callback({ access_token: 'token-ficticio', expires_in: auth.expires_in ?? 3500 });
+      else if (auth.result === 'denied') options.callback({ error: 'access_denied' });
+      else if (auth.result === 'interrupted') options.error_callback({ type: 'popup_closed' });
+    } };
+  } } } };
   const context = {
     console, localStorage: storage, fetch: service.fetch, crypto: webcrypto,
     TextEncoder, Blob, URL, Intl,
     navigator: { onLine: online }, location: { protocol: 'https:' },
     document: { body: new Element(), hidden: false, createElement: () => new Element(),
-      getElementById: get, querySelector: get, querySelectorAll: () => [], addEventListener() {} },
-    window: { addEventListener() {}, dispatchEvent() {} },
+      getElementById: get, querySelector: get, querySelectorAll: () => [], addEventListener(name, fn) { events[name] = fn; } },
+    window: { google, addEventListener(name, fn) { events[name] = fn; }, dispatchEvent() {} }, google,
     Event: function Event(type) { this.type = type; },
     alert: message => alerts.push(message), confirm: message => { confirmations.push(message); return choices.shift() ?? false; },
-    prompt: () => '', setTimeout: () => 1, clearTimeout() {}, setInterval() {},
+    prompt: () => '', setTimeout: (fn, delay) => { timers.push({ fn, delay }); return timers.length; }, clearTimeout() {}, setInterval() {},
   };
   vm.createContext(context);
   vm.runInContext(scripts[0], context);
   vm.runInContext(scripts[1].replace(/\n\}\)\(\);\s*$/, `
-globalThis.__drive = { sync, normalizeRemote, remote, hash, dataHash, snapshot,
+globalThis.__drive = { sync, authorize, reconnectSilently, normalizeRemote, remote, hash, dataHash, snapshot,
   setToken() { token = 'ficticio'; tokenExpires = Date.now() + 600000; },
-  get conflict() { return conflict; } };
+  expireToken() { tokenExpires = 0; },
+  get conflict() { return conflict; }, get status() { return lastStatus; } };
 })();`), context);
-  context.__drive.setToken();
-  return { api: context.__drive, storage, alerts, confirmations, get };
+  if (!auth) context.__drive.setToken();
+  return { api: context.__drive, storage, alerts, confirmations, get, events, timers, requests, context };
 }
 
 async function resolve(instance, choice) {
@@ -535,6 +547,95 @@ async function main() {
     const instance = app(local, service, [], undefined, false);
     await instance.api.sync();
     assert.equal(service.calls.length, 0);
+    assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
+  });
+
+  await test('recarga recupera autorización sin pantalla y queda al día si las copias coinciden', async () => {
+    const local = data();
+    const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(local) }]);
+    const instance = app(local, service, [], undefined, true, { result: 'success' });
+    await instance.timers.find(timer => timer.delay === 0).fn();
+    await instance.api.reconnectSilently();
+    assert.equal(instance.api.status, 'Drive · Al día');
+    assert.equal(instance.requests.length, 1);
+    assert.equal(instance.requests[0].prompt, 'none');
+    assert.equal(service.calls.filter(call => call.method !== 'GET').length, 0);
+    assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
+    assert.equal(instance.storage.getItem('mis-finanzas-google-drive-token'), null);
+  });
+
+  await test('autorización denegada o interrumpida requiere conexión sin modificar copias', async () => {
+    for (const result of ['denied', 'interrupted']) {
+      const local = data();
+      const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(local) }]);
+      const instance = app(local, service, [], undefined, true, { result });
+      await instance.api.reconnectSilently();
+      assert.equal(instance.api.status, 'Drive · Requiere conexión');
+      assert.equal(instance.requests[0].prompt, 'none');
+      assert.equal(instance.alerts.length, 0);
+      assert.equal(service.calls.length, 0);
+      assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
+      await instance.api.reconnectSilently();
+      assert.equal(instance.requests.length, 1);
+    }
+  });
+
+  await test('conexión manual solicita cuenta solo después de la acción explícita', async () => {
+    const instance = app(data(), drive([]), [], undefined, true, { result: 'success' });
+    assert.equal(instance.requests.length, 0);
+    await instance.api.authorize(true);
+    assert.equal(instance.requests.length, 1);
+    assert.equal(instance.requests[0].prompt, 'select_account');
+  });
+
+  await test('token caducado no se reutiliza ni dispara otra autorización automática', async () => {
+    const local = data();
+    const instance = app(local, drive([]), [], undefined, true, { result: 'success', expires_in: 1 });
+    await instance.api.reconnectSilently();
+    assert.equal(instance.api.status, 'Drive · Requiere conexión');
+    await instance.api.reconnectSilently();
+    assert.equal(instance.requests.length, 1);
+  });
+
+  await test('sesión caducada tras sincronizar muestra conexión requerida', async () => {
+    const local = data();
+    const instance = app(local, drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(local) }]), [], undefined, true, { result: 'success' });
+    await instance.api.reconnectSilently();
+    assert.equal(instance.api.status, 'Drive · Al día');
+    instance.api.expireToken();
+    await instance.api.sync(false);
+    assert.equal(instance.api.status, 'Drive · Requiere conexión');
+    assert.equal(instance.requests.length, 1);
+  });
+
+  await test('con autorización recuperada muestra pendiente al guardar hasta sincronizar', async () => {
+    const local = data();
+    const instance = app(local, drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(local) }]), [], undefined, true, { result: 'success' });
+    await instance.api.reconnectSilently();
+    instance.events['finanzas-local-save']();
+    assert.equal(instance.api.status, 'Drive · Pendiente');
+  });
+
+  await test('arranque sin conexión espera online antes del único intento silencioso', async () => {
+    const local = data();
+    const instance = app(local, drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(local) }]), [], undefined, false, { result: 'success' });
+    await instance.api.reconnectSilently();
+    assert.equal(instance.requests.length, 0);
+    instance.context.navigator.onLine = true;
+    await instance.events.online();
+    assert.equal(instance.requests.length, 1);
+    assert.equal(instance.api.status, 'Drive · Al día');
+  });
+
+  await test('conflicto permanece pendiente tras reconexión silenciosa', async () => {
+    const local = data();
+    const remote = data({ transactions: [{ ...local.transactions[0], amount: 15 }] });
+    const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
+    const instance = app(local, service, [], undefined, true, { result: 'success' });
+    await instance.api.reconnectSilently();
+    assert.equal(instance.api.status, 'Drive · Conflicto pendiente');
+    assert.equal(instance.api.conflict, true);
+    assert.equal(service.calls.filter(call => call.method !== 'GET').length, 0);
     assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
   });
 }
