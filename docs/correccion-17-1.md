@@ -1,5 +1,9 @@
 # Corrección 17.1: sin ventanas emergentes automáticas
 
+> Nota histórica: esta decisión fue revertida para restaurar el intento
+> automático de la Corrección 17. El texto siguiente describe la 17.1 mientras
+> estuvo vigente; Google puede abrir una ventana con `prompt: 'none'`.
+
 Google Identity Services puede abrir una ventana al llamar a
 `requestAccessToken({prompt: 'none'})`. Por eso la aplicación ya no solicita
 un token al cargar, refrescar, recuperar la red o volver a estar visible.
