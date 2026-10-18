@@ -57,16 +57,24 @@ function response(body) {
 }
 
 function drive(files = []) {
-  const copies = files.map(file => ({ ...file }));
+  const copies = files.map(file => ({ name: 'mis-finanzas-sync-v1.json', ...file }));
   const calls = [];
+  const service = { copies, calls, failCreate: false, failPatch: false, corruptCreated: false, corruptPatched: false, corruptPatchedSettings: false };
   const fetch = async (url, options = {}) => {
     calls.push({ url, method: options.method || 'GET' });
     if (url.includes('/upload/drive/v3/files')) {
       const id = url.match(/\/files\/([^?]+)\?/i)?.[1];
+      if (id && service.failPatch) throw Error('Fallo ficticio al actualizar archivo principal');
+      if (!id && service.failCreate) throw Error('Fallo ficticio al crear respaldo');
       const raw = id ? options.body : options.body.split('\r\nContent-Type: application/json\r\n\r\n')[1].split('\r\n--')[0];
-      if (id) copies.find(file => file.id === id).body = raw;
-      else copies.push({ id: 'creada', modifiedTime: '2026-02-01T00:00:00Z', body: raw });
-      return response({ id: id || 'creada' });
+      if (id) copies.find(file => file.id === id).body = service.corruptPatched ? JSON.stringify(data({ revision: 999 }))
+        : service.corruptPatchedSettings ? JSON.stringify({ ...JSON.parse(raw), settings: { ...JSON.parse(raw).settings, syncId: 'otro-ajuste-ficticio' } }) : raw;
+      else {
+        const metadata = JSON.parse(options.body.split('\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n')[1].split('\r\n--')[0]);
+        copies.push({ id: `creada-${copies.length}`, name: metadata.name,
+          modifiedTime: '2026-02-01T00:00:00Z', body: service.corruptCreated ? '{dañado' : raw });
+      }
+      return response({ id: id || copies.at(-1).id });
     }
     if (url.includes('?alt=media')) {
       const id = url.match(/\/files\/([^?]+)\?/i)[1];
@@ -75,15 +83,17 @@ function drive(files = []) {
       return response(file.body);
     }
     if (url.includes('/drive/v3/files?')) {
+      const mainFiles = copies.filter(file => file.name === 'mis-finanzas-sync-v1.json');
       const page = new URL(url).searchParams.get('pageToken');
-      const items = page === 'second' ? copies.slice(1) : copies.slice(0, 1);
+      const items = page === 'second' ? mainFiles.slice(1) : mainFiles.slice(0, 1);
       return response({ files: items.map(file => ({ id: file.id,
-        name: 'mis-finanzas-sync-v1.json', modifiedTime: file.modifiedTime })),
-        nextPageToken: !page && copies.length > 1 ? 'second' : undefined });
+        name: file.name, modifiedTime: file.modifiedTime })),
+        nextPageToken: !page && mainFiles.length > 1 ? 'second' : undefined });
     }
     throw Error('Solicitud inesperada: ' + url);
   };
-  return { copies, calls, fetch };
+  service.fetch = fetch;
+  return service;
 }
 
 function app(local, service, choices = [], storage = new Storage({ [KEY]: JSON.stringify(local) }), online = true) {
@@ -110,7 +120,16 @@ globalThis.__drive = { sync, normalizeRemote, remote, hash, dataHash, snapshot,
   get conflict() { return conflict; } };
 })();`), context);
   context.__drive.setToken();
-  return { api: context.__drive, storage, alerts, confirmations };
+  return { api: context.__drive, storage, alerts, confirmations, get };
+}
+
+async function resolve(instance, choice) {
+  const result = instance.api.sync(true);
+  const id = { local: 'driveKeepLocal', remote: 'driveUseRemote', cancel: 'driveConflictCancel' }[choice];
+  for (let attempt = 0; attempt < 200 && !instance.get(id).onclick; attempt++) await new Promise(done => setTimeout(done, 1));
+  assert.equal(typeof instance.get(id).onclick, 'function', `Debe abrirse el diálogo de conflicto: ${JSON.stringify(instance.alerts)} ${instance.get('modal').innerHTML.slice(0, 160)}`);
+  instance.get(id).onclick();
+  await result;
 }
 
 async function test(name, run) {
@@ -127,9 +146,9 @@ async function main() {
       debts: [...local.debts, { id: 'deuda-2', name: 'Otro ejemplo', balance: 40 }],
       goals: [...local.goals, { id: 'meta-2', name: 'Otro ejemplo', target: 60 }] });
     const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
-    const instance = app(local, service);
+    const instance = app(local, service, [true, true]);
     instance.storage.setItem(BASE, await instance.api.hash(instance.api.snapshot()));
-    await instance.api.sync();
+    await resolve(instance, 'remote');
     const saved = JSON.parse(instance.storage.getItem(KEY));
     assert.equal(saved.accounts[1].id, 'banco');
     assert.deepEqual(saved.transactions[0], local.transactions[0]);
@@ -174,9 +193,9 @@ async function main() {
     const old = data({ revision: 3 });
     delete old.settings;
     const service = drive([{ id: 'antigua', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(old) }]);
-    const instance = app(local, service);
+    const instance = app(local, service, [true, true]);
     instance.storage.setItem(BASE, await instance.api.hash(instance.api.snapshot()));
-    await instance.api.sync();
+    await resolve(instance, 'remote');
     assert.equal(JSON.parse(instance.storage.getItem(KEY)).revision, 3);
     assert.equal(JSON.parse(instance.storage.getItem(KEY)).settings.syncId, 'dispositivo-local');
     await instance.api.sync();
@@ -184,12 +203,12 @@ async function main() {
   });
 
   await test('conflicto conserva ambas copias al cancelar o rechazar la segunda confirmación', async () => {
-    for (const choices of [[], [true, false]]) {
+    for (const scenario of [{ choice: 'cancel', answers: [] }, { choice: 'remote', answers: [true, false] }]) {
       const local = data({ revision: 2 });
       const remote = data({ revision: 3 });
       const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
-      const instance = app(local, service, choices);
-      await instance.api.sync(true);
+      const instance = app(local, service, scenario.answers);
+      await resolve(instance, scenario.choice);
       assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
       assert.equal(service.copies[0].body, JSON.stringify(remote));
       assert.equal(instance.api.conflict, true);
@@ -201,13 +220,14 @@ async function main() {
     const remote = data({ revision: 3, settings: { ...data().settings, lastSync: 'registro-remoto', preference: 'remota' } });
     const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
     const instance = app(local, service, [true, true]);
-    await instance.api.sync(true);
+    await resolve(instance, 'remote');
     const saved = JSON.parse(instance.storage.getItem(KEY));
     assert.equal(saved.revision, 3);
     assert.equal(saved.settings.syncId, 'ejemplo');
     assert.equal(saved.settings.lastSync, 'registro-local');
     assert.equal(saved.settings.preference, 'local');
     assert.equal(service.copies[0].body, JSON.stringify(remote));
+    assert.equal(instance.confirmations.length, 2);
   });
 
   await test('preserva ajustes locales modificados mientras se descarga Drive', async () => {
@@ -224,10 +244,10 @@ async function main() {
       }
       return originalFetch(url, options);
     };
-    const instance = app(local, service);
+    const instance = app(local, service, [true, true]);
     storage = instance.storage;
     instance.storage.setItem(BASE, await instance.api.dataHash(instance.api.snapshot()));
-    await instance.api.sync();
+    await resolve(instance, 'remote');
     const saved = JSON.parse(instance.storage.getItem(KEY));
     assert.equal(saved.revision, 3);
     assert.equal(saved.settings.syncId, 'ajuste-ficticio-nuevo');
@@ -240,9 +260,9 @@ async function main() {
       { id: 'vieja', modifiedTime: '2026-01-01T00:00:00Z', body: JSON.stringify(old) },
       { id: 'nueva', modifiedTime: '2026-01-03T00:00:00Z', body: JSON.stringify(latest) },
     ]);
-    const instance = app(old, service);
+    const instance = app(old, service, [true, true]);
     instance.storage.setItem(BASE, await instance.api.hash(instance.api.snapshot()));
-    await instance.api.sync();
+    await resolve(instance, 'remote');
     assert.equal(JSON.parse(instance.storage.getItem(KEY)).revision, 3);
     assert.equal(service.copies.length, 2);
   });
@@ -273,9 +293,8 @@ async function main() {
       assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
       assert.equal(instance.api.conflict, true);
       assert.equal(service.copies[0].body, JSON.stringify(remote));
-      await instance.api.sync(true);
-      assert.equal(instance.confirmations.length, 1);
-      assert.match(instance.confirmations[0], /REEMPLAZAR los datos locales/);
+      await resolve(instance, 'cancel');
+      assert.equal(instance.confirmations.length, 0);
       assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
       assert.equal(service.copies[0].body, JSON.stringify(remote));
     }
@@ -343,10 +362,10 @@ async function main() {
       if (url.includes('?alt=media') && storage.getItem(KEY) === JSON.stringify(local)) storage.setItem(KEY, JSON.stringify(changed));
       return originalFetch(url, options);
     };
-    const instance = app(local, service);
+    const instance = app(local, service, [true, true]);
     storage = instance.storage;
     instance.storage.setItem(BASE, await instance.api.hash(instance.api.snapshot()));
-    await instance.api.sync(true);
+    await resolve(instance, 'remote');
     assert.equal(instance.storage.getItem(KEY), JSON.stringify(changed));
     assert.equal(service.copies[0].body, JSON.stringify(remote));
     assert.equal(instance.alerts.length, 1);
@@ -356,12 +375,146 @@ async function main() {
     const remote = data();
     const local = data({ revision: 2 });
     const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
-    const instance = app(local, service);
+    const instance = app(local, service, [true, true]);
     instance.storage.setItem(BASE, await instance.api.hash(instance.api.normalizeRemote(remote)));
     await instance.api.sync();
+    assert.equal(instance.api.conflict, true);
+    assert.equal(service.calls.filter(call => call.method !== 'GET').length, 0);
+    await resolve(instance, 'local');
     assert.equal(JSON.parse(service.copies[0].body).revision, 2);
     assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
     assert.equal(instance.storage.getItem(BASE), await instance.api.dataHash(instance.api.snapshot()));
+    assert.equal(instance.confirmations.length, 2);
+    assert.equal(service.copies.length, 2);
+    assert.match(service.copies[1].name, /^mis-finanzas-respaldo-/);
+    assert.equal(service.copies[1].body, JSON.stringify(remote));
+    assert.match(instance.alerts[0], /copia anterior sigue disponible/);
+    await instance.api.sync();
+    assert.equal(instance.api.conflict, false);
+  });
+
+  await test('primera sincronización sin archivo remoto crea solo el principal y verifica su lectura', async () => {
+    const local = data();
+    const service = drive();
+    const instance = app(local, service);
+    await instance.api.sync();
+    assert.equal(service.copies.length, 1);
+    assert.equal(service.copies[0].name, 'mis-finanzas-sync-v1.json');
+    assert.deepEqual(JSON.parse(service.copies[0].body).transactions, local.transactions);
+    assert.equal(instance.storage.getItem(BASE), await instance.api.dataHash(instance.api.snapshot()));
+  });
+
+  await test('conservar este dispositivo guarda todos los registros y vínculos de recurrencia', async () => {
+    const baseMovement = data().transactions[0];
+    const local = data({ revision: 4,
+      accounts: [...data().accounts, { id: 'banco', name: 'Banco ficticio', type: 'bank', opening: 10 }],
+      transactions: [baseMovement,
+        { ...baseMovement, id: 'mov-2', recurrenceParentId: 'mov-1', recurrenceRootId: 'mov-1', generatedNextId: '', status: 'done' },
+        { ...baseMovement, id: 'transferencia', type: 'transfer', toAccount: 'banco', amount: 12, status: 'done', repeat: '' },
+        { ...baseMovement, id: 'aporte-meta', linkKind: 'goal', linkId: 'meta', status: 'done', repeat: '' },
+        { ...baseMovement, id: 'abono-deuda', linkKind: 'debt', linkId: 'deuda', status: 'done', repeat: '' },
+        { ...baseMovement, id: 'eliminado', deleted: true, repeat: '' }] });
+    const remote = data({ revision: 2, transactions: [{ ...data().transactions[0], amount: 99 }] });
+    const service = drive([{ id: 'principal', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
+    const instance = app(local, service, [true, true]);
+    await resolve(instance, 'local');
+    const uploaded = JSON.parse(service.copies[0].body);
+    assert.deepEqual(uploaded.accounts, local.accounts);
+    assert.deepEqual(uploaded.transactions, local.transactions);
+    assert.deepEqual(uploaded.budgets, local.budgets);
+    assert.deepEqual(uploaded.debts, local.debts);
+    assert.deepEqual(uploaded.goals, local.goals);
+    assert.equal(service.copies[1].body, JSON.stringify(remote));
+    assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
+  });
+
+  await test('cancelar o rechazar cualquiera de las dos confirmaciones locales no escribe en Drive', async () => {
+    for (const scenario of [{ choice: 'cancel', answers: [] }, { choice: 'local', answers: [false] },
+      { choice: 'local', answers: [true, false] }]) {
+      const local = data({ revision: 4 });
+      const remote = data({ revision: 2 });
+      const service = drive([{ id: 'principal', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
+      const instance = app(local, service, scenario.answers);
+      await resolve(instance, scenario.choice);
+      assert.equal(service.copies.length, 1);
+      assert.equal(service.copies[0].body, JSON.stringify(remote));
+      assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
+      assert.equal(instance.api.conflict, true);
+    }
+  });
+
+  await test('fallo al crear o verificar respaldo no actualiza el archivo principal', async () => {
+    for (const failure of ['failCreate', 'corruptCreated']) {
+      const local = data({ revision: 4 });
+      const remote = data({ revision: 2 });
+      const service = drive([{ id: 'principal', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
+      service[failure] = true;
+      const instance = app(local, service, [true, true]);
+      await resolve(instance, 'local');
+      assert.equal(service.copies[0].body, JSON.stringify(remote));
+      assert.equal(service.calls.filter(call => call.method === 'PATCH').length, 0);
+      assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
+      assert.equal(instance.storage.getItem(BASE), null);
+      assert.equal(instance.api.conflict, true);
+      assert.equal(instance.alerts.length, 1);
+    }
+  });
+
+  await test('cambio local después del respaldo aborta antes de actualizar Drive', async () => {
+    const local = data({ revision: 4 });
+    const changed = data({ revision: 5 });
+    const remote = data({ revision: 2 });
+    const service = drive([{ id: 'principal', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
+    const originalFetch = service.fetch;
+    let storage;
+    service.fetch = async (url, options) => {
+      const result = await originalFetch(url, options);
+      if (options?.method === 'POST') storage.setItem(KEY, JSON.stringify(changed));
+      return result;
+    };
+    const instance = app(local, service, [true, true]);
+    storage = instance.storage;
+    await resolve(instance, 'local');
+    assert.equal(instance.storage.getItem(KEY), JSON.stringify(changed));
+    assert.equal(service.copies[0].body, JSON.stringify(remote));
+    assert.equal(service.copies[1].body, JSON.stringify(remote));
+    assert.equal(service.calls.filter(call => call.method === 'PATCH').length, 0);
+  });
+
+  await test('cambio remoto después del respaldo aborta antes de actualizar el principal', async () => {
+    const local = data({ revision: 4 });
+    const remote = data({ revision: 2 });
+    const changed = data({ revision: 5 });
+    const service = drive([{ id: 'principal', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
+    const originalFetch = service.fetch;
+    service.fetch = async (url, options) => {
+      const result = await originalFetch(url, options);
+      if (options?.method === 'POST') service.copies[0].body = JSON.stringify(changed);
+      return result;
+    };
+    const instance = app(local, service, [true, true]);
+    await resolve(instance, 'local');
+    assert.equal(service.copies[0].body, JSON.stringify(changed));
+    assert.equal(service.copies[1].body, JSON.stringify(remote));
+    assert.equal(service.calls.filter(call => call.method === 'PATCH').length, 0);
+    assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
+  });
+
+  await test('fallo al subir o verificar después de subir mantiene el respaldo y la base sin cambios', async () => {
+    for (const failure of ['failPatch', 'corruptPatched', 'corruptPatchedSettings']) {
+      const local = data({ revision: 4 });
+      const remote = data({ revision: 2 });
+      const service = drive([{ id: 'principal', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
+      service[failure] = true;
+      const instance = app(local, service, [true, true]);
+      await resolve(instance, 'local');
+      assert.equal(service.copies[1].body, JSON.stringify(remote));
+      assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
+      assert.equal(instance.storage.getItem(BASE), null);
+      assert.equal(instance.api.conflict, true);
+      assert.equal(instance.alerts.length, 1);
+      if (failure === 'failPatch') assert.equal(service.copies[0].body, JSON.stringify(remote));
+    }
   });
 
   await test('no usa una copia antigua cuando la más reciente está dañada', async () => {

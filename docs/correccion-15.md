@@ -1,5 +1,8 @@
 # Corrección 15: sincronización segura con Google Drive
 
+Nota: la Corrección 16 reemplaza la descarga automática de versiones diferentes
+por una elección explícita. Véase `docs/correccion-16.md` para el flujo vigente.
+
 La sincronización usa el mismo archivo `mis-finanzas-sync-v1.json` en
 `appDataFolder`, la misma autorización OAuth y las mismas claves locales.
 No fusiona movimientos entre dispositivos.
