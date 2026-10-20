@@ -221,4 +221,4 @@ class Client {
   }
 }
 
-module.exports = { Client, canonical, digest, envelope, prepareGenesis, resolve, scan };
+module.exports = { Client, canonical, digest, envelope, prepareGenesis, resolve, scan, unpack };
