@@ -150,12 +150,14 @@ body{background:#f5f7fb;letter-spacing:-.018em}
 /* Indicadores de Drive sin cubrir controles ni formularios. */
 #driveStateSlot{height:0;overflow:hidden;transition:height .2s ease}
 #driveStateSlot:has(#driveStateBar:not([hidden])){height:50px}
+#driveStateSlot:has(#driveStateBar:not([hidden]) button:not([hidden])){height:62px}
 .top{transition:margin-bottom .2s ease}
 .top:has(+ #driveStateSlot #driveStateBar:not([hidden])){margin-bottom:10px}
 #driveStateBar,#driveToast{z-index:6;background:#fff;border:1px solid #e4e9f4;box-shadow:0 4px 14px #243e691c;color:#4164a4}
 #driveStateBar[hidden],#driveToast[hidden]{display:none!important}
-#driveStateBar{min-height:38px;border-radius:12px;padding:8px 12px;display:flex;align-items:center;gap:9px;pointer-events:none;font-size:12px;font-weight:650;line-height:1.3}
+#driveStateBar{min-height:38px;border-radius:12px;padding:8px 12px;display:flex;align-items:center;gap:9px;font-size:12px;font-weight:650;line-height:1.3}
 #driveStateBar .sync-dot{width:9px;height:9px;border-radius:50%;background:#ec9b48;flex:none}#driveStateBar[data-state=active] .sync-dot{background:#4164a4;animation:drive-status-pulse 1.4s ease-in-out infinite}
+#driveStateBar button{margin-left:auto;border:0;background:transparent;color:inherit;min-width:62px;min-height:32px;padding:4px;font-size:12px;font-weight:700;border-radius:8px}#driveStateBar button:hover,#driveStateBar button:focus-visible{background:#f4f1f7}
 #driveToast{position:fixed;left:50%;width:min(420px,calc(100vw - 24px));transform:translateX(-50%);bottom:calc(172px + env(safe-area-inset-bottom));border-radius:12px;padding:10px 11px;display:flex;align-items:center;gap:9px;font-size:12px;line-height:1.4}
 #driveToast[data-tone=error]{color:#9f4b36;border-color:#f0dacd}#driveToast[data-tone=success]{color:#168568;border-color:#d7eadf}
 #driveToastMessage{flex:1;min-width:0;overflow-wrap:anywhere}#driveToast button{border:0;background:transparent;color:inherit;min-width:32px;min-height:32px;padding:4px;font-weight:700;border-radius:8px}
@@ -229,7 +231,7 @@ const snapshot=()=>{let d;try{const raw=localStorage.getItem(KEY);d=raw?JSON.par
 const hasToken=()=>!!token&&Date.now()<tokenExpires-60000;
 const driveBarSlot=document.createElement('div');driveBarSlot.id='driveStateSlot';document.querySelector('.top').after(driveBarSlot);
 const driveBar=document.createElement('div');driveBar.id='driveStateBar';driveBar.setAttribute('role','status');driveBar.setAttribute('aria-live','polite');driveBar.hidden=true;
-const driveBarDot=document.createElement('span');driveBarDot.className='sync-dot';driveBarDot.setAttribute('aria-hidden','true');const driveBarLabel=document.createElement('span');driveBar.append(driveBarDot,driveBarLabel);driveBarSlot.append(driveBar);
+const driveBarDot=document.createElement('span');driveBarDot.className='sync-dot';driveBarDot.setAttribute('aria-hidden','true');const driveBarLabel=document.createElement('span');const driveBarAction=document.createElement('button');driveBarAction.type='button';driveBarAction.hidden=true;driveBar.append(driveBarDot,driveBarLabel,driveBarAction);driveBarSlot.append(driveBar);
 const driveToast=document.createElement('div');driveToast.id='driveToast';driveToast.hidden=true;driveToast.setAttribute('aria-atomic','true');
 const driveToastMessage=document.createElement('span');driveToastMessage.id='driveToastMessage';const driveToastAction=document.createElement('button');driveToastAction.type='button';const driveToastDismiss=document.createElement('button');driveToastDismiss.type='button';driveToastDismiss.id='driveToastDismiss';driveToastDismiss.textContent='×';driveToastDismiss.setAttribute('aria-label','Descartar notificación');driveToast.append(driveToastMessage,driveToastAction,driveToastDismiss);document.body.append(driveToast);
 let toastKey='',dismissedToastKey='',toastTimer=0;
@@ -242,10 +244,13 @@ function showDriveToast(key,message,tone='error',action=''){
  if(tone==='success')toastTimer=setTimeout(clearDriveToast,4200);
 }
 function renderDriveFeedback(message,previous){
- if(message!==previous)dismissedToastKey='';
+ if(message==='Drive · Al día'&&!pending&&!conflict)dismissedToastKey='';
  const active=['Drive · Conectando','Drive · Sincronizando','Drive · Reiniciando'].includes(message);
- const attention=conflict||pending||message==='Drive · Revisar'||message==='Drive · Sin internet'&&previous==='Drive · Sincronizando';
+ const connectionIssue=message==='Drive · Requiere conexión'&&(pending||previous==='Drive · Conectando'||toastKey==='connection'||dismissedToastKey==='connection');
+ const attention=conflict||pending||message==='Drive · Revisar'||connectionIssue||message==='Drive · Sin internet'&&previous==='Drive · Sincronizando';
  driveBar.hidden=!(active||attention);driveBar.dataset.state=active?'active':'attention';driveBarLabel.textContent=active?message:conflict?'Drive · Conflicto pendiente':message;
+ const action=!active&&(conflict?'resolve':attention?'review':'');
+ driveBarAction.hidden=!action;driveBarAction.textContent=action==='resolve'?'Resolver':'Revisar';driveBarAction.setAttribute('aria-label',action==='resolve'?'Resolver conflicto de Google Drive':'Revisar estado de Google Drive');driveBarAction.onclick=action==='resolve'?()=>sync(true):action?()=>showPanel():null;
  if(message==='Drive · Conflicto pendiente'){showDriveToast('conflict','Hay cambios diferentes en Drive y este dispositivo. Elige qué versión conservar.','error','resolve');return}
  if(message==='Drive · Revisar'){showDriveToast('sync-error','No se pudo verificar Drive. Tus datos locales siguen en este dispositivo.','error','review');return}
  if(message==='Drive · Requiere conexión'&&(pending||['Drive · Conectando','Drive · Al día','Drive · Sincronizando'].includes(previous))){showDriveToast('connection','Google requiere conexión para continuar sincronizando.','error','review');return}

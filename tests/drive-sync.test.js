@@ -133,6 +133,8 @@ globalThis.__drive = { sync, authorize, reconnectSilently, normalizeRemote, remo
   expireToken() { tokenExpires = 0; },
   get conflict() { return conflict; }, get status() { return lastStatus; },
   get feedback() { return { barHidden: driveBar.hidden, barText: driveBarLabel.textContent,
+    barActionHidden: driveBarAction.hidden, barActionText: driveBarAction.textContent,
+    barActionLabel: driveBarAction.getAttribute('aria-label'), barAction: () => driveBarAction.onclick(),
     toastHidden: driveToast.hidden, toastText: driveToastMessage.textContent,
     toastRole: driveToast.getAttribute('role'), toastKey,
     dismiss: () => driveToastDismiss.onclick(), action: () => driveToastAction.onclick() }; } };
@@ -665,7 +667,12 @@ async function main() {
     assert.equal(instance.api.status, 'Drive · Requiere conexión');
     assert.match(instance.api.feedback.toastText, /requiere conexión/);
     assert.equal(instance.api.feedback.toastRole, 'alert');
-    assert.equal(instance.api.feedback.barHidden, true);
+    assert.equal(instance.api.feedback.barHidden, false);
+    assert.equal(instance.api.feedback.barActionText, 'Revisar');
+    instance.api.feedback.dismiss();
+    instance.events['finanzas-refresh-drive-status']();
+    assert.equal(instance.api.feedback.toastHidden, true);
+    assert.equal(instance.api.feedback.barActionHidden, false);
     assert.equal(service.calls.length, 0);
     assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
   });
@@ -704,6 +711,31 @@ async function main() {
     assert.equal(service.copies[0].body, JSON.stringify(remote));
   });
 
+  await test('descartar un conflicto conserva el acceso visible a la resolución', async () => {
+    const local = data();
+    const remote = data({ transactions: [{ ...local.transactions[0], amount: 12 }] });
+    const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
+    const instance = app(local, service);
+    await instance.api.sync(false);
+    instance.api.feedback.dismiss();
+    assert.equal(instance.api.feedback.toastHidden, true);
+    assert.equal(instance.api.feedback.barHidden, false);
+    assert.equal(instance.api.feedback.barActionHidden, false);
+    assert.equal(instance.api.feedback.barActionText, 'Resolver');
+    assert.equal(instance.api.feedback.barActionLabel, 'Resolver conflicto de Google Drive');
+    instance.events['finanzas-refresh-drive-status']();
+    assert.equal(instance.api.feedback.toastHidden, true);
+    const result = instance.api.feedback.barAction();
+    for (let attempt = 0; attempt < 200 && !instance.get('driveConflictCancel').onclick; attempt++) await new Promise(done => setTimeout(done, 1));
+    assert.equal(typeof instance.get('driveConflictCancel').onclick, 'function');
+    instance.get('driveConflictCancel').onclick();
+    await result;
+    assert.equal(instance.api.feedback.toastHidden, true);
+    assert.equal(instance.api.feedback.barActionHidden, false);
+    assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
+    assert.equal(service.copies[0].body, JSON.stringify(remote));
+  });
+
   await test('error de sincronización y cambios pendientes dejan aviso persistente', async () => {
     const local = data();
     const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: '{dañado' }]);
@@ -717,6 +749,24 @@ async function main() {
     instance.events['finanzas-refresh-drive-status']();
     assert.equal(instance.api.feedback.toastKey, 'sync-error');
     assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
+  });
+
+  await test('descartar un error conserva Revisar en la barra y abre el panel', async () => {
+    const local = data();
+    const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: '{dañado' }]);
+    const instance = app(local, service);
+    await instance.api.sync(false);
+    assert.equal(instance.api.status, 'Drive · Revisar');
+    instance.api.feedback.dismiss();
+    instance.events['finanzas-refresh-drive-status']();
+    assert.equal(instance.api.feedback.toastHidden, true);
+    assert.equal(instance.api.feedback.barHidden, false);
+    assert.equal(instance.api.feedback.barActionText, 'Revisar');
+    assert.equal(instance.api.feedback.barActionLabel, 'Revisar estado de Google Drive');
+    instance.api.feedback.barAction();
+    assert.match(instance.get('modal').innerHTML, /Google Drive/);
+    assert.equal(instance.storage.getItem(KEY), JSON.stringify(local));
+    assert.equal(service.copies[0].body, '{dañado');
   });
 
   await test('sin internet y cambios pendientes informa sin acceder a Drive', async () => {
