@@ -23,6 +23,7 @@ class FakeElement {
   focus() {}
   setSelectionRange() {}
   before() {}
+  prepend() {}
   append() {}
   remove() {}
 }
