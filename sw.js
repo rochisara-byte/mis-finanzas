@@ -1,6 +1,5 @@
 const CACHE_VERSION = 2;
-// Digest identifies the previous published shell; version 2 invalidates it on activation.
-// The cache version, not this metadata, controls the active app shell.
+const SHELL_DIGEST = 'd8f0d275750e62aa4139f6b54f6eab3a3a7090218cab490ccd4683ab92b9e305';
 const SHELL_CACHE = `mis-finanzas-shell-v${CACHE_VERSION}`;
 const SHELL_PREFIX = 'mis-finanzas-shell-v';
 const root = new URL('./', self.registration.scope);
