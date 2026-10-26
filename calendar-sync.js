@@ -6,7 +6,7 @@ const ROOT='https://www.googleapis.com/calendar/v3';
 const CAL_NAME='Mis Finanzas · Pagos';
 const OWNER='mis-finanzas-v27';
 const fmt=n=>new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(Number(n)||0);
-const validDate=s=>/^\\d{4}-\\d{2}-\\d{2}$/.test(String(s||''))&&!Number.isNaN(Date.parse(s+'T12:00:00Z'));
+const validDate=s=>/^\d{4}-\d{2}-\d{2}$/.test(String(s||''))&&!Number.isNaN(Date.parse(s+'T12:00:00Z'));
 const eligible=t=>t&&!t.deleted&&t.type==='expense'&&t.status==='pending'&&validDate(t.date)&&!!t.id;
 const normalize=t=>({id:String(t.id),title:String(t.title||'Pago pendiente'),amount:Number(t.amount)||0,date:t.date});
 const eventId=id=>{const bytes=new TextEncoder().encode(OWNER+':'+id);let hex=Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');return 'mf'+hex.slice(0,900)};
