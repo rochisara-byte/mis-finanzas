@@ -17,7 +17,7 @@ const cases=[
  ['Estilos del desglose', '.finance-breakdown-row']
 ];
 for(const [name,fragment] of cases)assert.ok(html.includes(fragment),'Falta: '+name);
-const scripts=[...html.matchAll(/<script(?:\\s[^>]*)?>([\\s\\S]*?)<\\/script>/g)].map(m=>m[1]).filter(Boolean);
+const scripts=[...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map(m=>m[1]).filter(Boolean);
 assert.ok(scripts.length>=1,'Sin scripts inline');
 for(const script of scripts)new Function(script);
 console.log('Mejora 24: '+cases.length+' verificaciones de integración y '+scripts.length+' scripts válidos');
