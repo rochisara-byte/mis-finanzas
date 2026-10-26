@@ -1,5 +1,5 @@
-const CACHE_VERSION = 3;
-const SHELL_DIGEST = 'aac5d7ed3aee0e33135b1985e7f374ce06b30b5767fe0606d2b70928fa07c8e5';
+const CACHE_VERSION = 4;
+const SHELL_DIGEST = '7634bce13d2347d0f3a54e926708c25996f5f3b98590827588b9351f93dbe94a';
 const SHELL_CACHE = `mis-finanzas-shell-v${CACHE_VERSION}`;
 const SHELL_PREFIX = 'mis-finanzas-shell-v';
 const root = new URL('./', self.registration.scope);
