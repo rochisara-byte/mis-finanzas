@@ -1,4 +1,4 @@
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 const SHELL_DIGEST = 'aac5d7ed3aee0e33135b1985e7f374ce06b30b5767fe0606d2b70928fa07c8e5';
 const SHELL_CACHE = `mis-finanzas-shell-v${CACHE_VERSION}`;
 const SHELL_PREFIX = 'mis-finanzas-shell-v';
