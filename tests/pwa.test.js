@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const root = path.resolve(__dirname, '..');
+const shellVersion = Number(fs.readFileSync(path.join(root, 'sw.js'), 'utf8').match(/const CACHE_VERSION = (\d+);/)[1]);
 const key = 'mis-finanzas-offline-v1';
 const files = new Map([
   ['', ['index.html', 'text/html; charset=utf-8']],
@@ -25,7 +26,7 @@ const fixture = {
 };
 
 function serverForTest() {
-  const state = { version: 1, failAsset: false };
+  const state = { version: shellVersion, failAsset: false };
   const server = http.createServer((request, response) => {
     const pathname = new URL(request.url, 'http://localhost').pathname;
     const name = pathname.startsWith('/mis-finanzas/') ? pathname.slice('/mis-finanzas/'.length) : null;
@@ -36,7 +37,7 @@ function serverForTest() {
     }
     let body = fs.readFileSync(path.join(root, entry[0]));
     if (name === 'sw.js') {
-      body = Buffer.from(body.toString().replace('const CACHE_VERSION = 1;',
+      body = Buffer.from(body.toString().replace(/const CACHE_VERSION = \d+;/,
         `const CACHE_VERSION = ${state.version};`));
     }
     response.writeHead(200, { 'Content-Type': entry[1], 'Cache-Control': 'no-store' });
@@ -137,10 +138,10 @@ async function main() {
     }));
     const mockedDrive = await page.evaluate(() => fetch('https://www.googleapis.com/drive/v3/files?test=ficticio').then(response => response.json()));
     assert.equal(mockedDrive.files.length, 0);
-    const afterDrive = await page.evaluate(async () => {
-      const cache = await caches.open('mis-finanzas-shell-v1');
+    const afterDrive = await page.evaluate(async shellVersion => {
+      const cache = await caches.open(`mis-finanzas-shell-v${shellVersion}`);
       return (await cache.keys()).map(request => request.url);
-    });
+    }, shellVersion);
     assert.deepEqual(afterDrive, cacheUrls);
     assert.deepEqual(errors, []);
     console.log('ok - worker activo y caché limitado al shell propio');
@@ -173,7 +174,7 @@ async function main() {
     console.log('ok - apertura, navegación y guardado sin conexión tras cerrar y reabrir');
 
     await context.setOffline(false);
-    state.version = 2;
+    state.version = shellVersion + 1;
     state.failAsset = true;
     assert.equal(await observeUpdate(page), 'redundant');
     assert.equal(await page.evaluate(async () => (await navigator.serviceWorker.getRegistration()).waiting), null);
@@ -184,7 +185,7 @@ async function main() {
     console.log('ok - instalación interrumpida conserva la versión anterior y los datos');
 
     await context.setOffline(false);
-    state.version = 3;
+    state.version = shellVersion + 2;
     state.failAsset = false;
     assert.equal(await observeUpdate(page), 'installed');
     assert.equal(await page.evaluate(async () => !!(await navigator.serviceWorker.getRegistration()).waiting), true);
@@ -194,8 +195,8 @@ async function main() {
     await page.goto(address);
     await page.waitForFunction(async () => (await navigator.serviceWorker.ready).active.state === 'activated');
     const cacheNames = await page.evaluate(() => caches.keys());
-    assert.ok(cacheNames.includes('mis-finanzas-shell-v3'));
-    assert.ok(!cacheNames.includes('mis-finanzas-shell-v1'));
+    assert.ok(cacheNames.includes(`mis-finanzas-shell-v${shellVersion + 2}`));
+    assert.ok(!cacheNames.includes(`mis-finanzas-shell-v${shellVersion}`));
     assert.deepEqual(await stored(page), saved);
     await context.setOffline(true);
     assert.equal((await page.reload()).fromServiceWorker(), true);
