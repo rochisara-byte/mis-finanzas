@@ -82,6 +82,39 @@ async function main() {
           return toast.hidden || toast.getBoundingClientRect().right <= panel.left;
         });
         assert.equal(feedback, true, `el aviso de Drive no debe tapar el registro a ${width}px`);
+        for (const section of ['Listas', 'Cuentas']) {
+          await page.locator(`#desktopNav [data-page="${section}"]`).click();
+          const geometry = await page.evaluate(section => {
+            const main = document.querySelector('#main');
+            const lists = [...main.querySelectorAll(':scope > .flat-list')];
+            const first = section === 'Listas' ? lists[0] : main.querySelector('.total-account');
+            const second = section === 'Listas' ? lists[1] : lists[0];
+            const panel = document.querySelector('#modal').getBoundingClientRect();
+            const rect = element => {
+              const box = element.getBoundingClientRect();
+              return { left: box.left, right: box.right, top: box.top, bottom: box.bottom };
+            };
+            const clipped = [...main.querySelectorAll('.flat-list .item')].some(item => {
+              const box = item.getBoundingClientRect();
+              const parent = item.parentElement.getBoundingClientRect();
+              return box.left < parent.left - 1 || box.right > parent.right + 1 || item.scrollWidth > item.clientWidth + 1;
+            });
+            return { first: rect(first), second: rect(second), panelLeft: panel.left,
+              clipped, firstPadding: parseFloat(getComputedStyle(lists[0]).paddingBottom),
+              newAccount: section === 'Cuentas' ? rect(main.querySelector('.new-account')) : null };
+          }, section);
+          assert.equal(geometry.clipped, false, `${section}: tarjeta cortada a ${width}px`);
+          assert.ok(geometry.second.right <= geometry.panelLeft, `${section}: invade el panel a ${width}px`);
+          assert.equal(geometry.firstPadding, 0, `${section}: espacio móvil residual a ${width}px`);
+          if (width >= 1280) {
+            assert.ok(geometry.first.right < geometry.second.left, `${section}: columnas superpuestas a ${width}px`);
+          } else {
+            assert.ok(geometry.first.bottom <= geometry.second.top, `${section}: bloques superpuestos a ${width}px`);
+          }
+          if (section === 'Cuentas') {
+            assert.ok(geometry.second.bottom <= geometry.newAccount.top, `Cuenta nueva superpuesta a ${width}px`);
+          }
+        }
       }
       if (width === 320) {
         await page.locator('#add').click();
