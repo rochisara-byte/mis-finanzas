@@ -1,0 +1,28 @@
+/* Mejora 27: motor aislado de Google Calendar. Sin acceso a Drive ni escrituras a la base financiera. */
+(function(global){
+'use strict';
+const SCOPE='https://www.googleapis.com/auth/calendar.app.created';
+const ROOT='https://www.googleapis.com/calendar/v3';
+const CAL_NAME='Mis Finanzas · Pagos';
+const OWNER='mis-finanzas-v27';
+const fmt=n=>new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(Number(n)||0);
+const validDate=s=>/^\\d{4}-\\d{2}-\\d{2}$/.test(String(s||''))&&!Number.isNaN(Date.parse(s+'T12:00:00Z'));
+const eligible=t=>t&&!t.deleted&&t.type==='expense'&&t.status==='pending'&&validDate(t.date)&&!!t.id;
+const normalize=t=>({id:String(t.id),title:String(t.title||'Pago pendiente'),amount:Number(t.amount)||0,date:t.date});
+const eventId=id=>{const bytes=new TextEncoder().encode(OWNER+':'+id);let hex=Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');return 'mf'+hex.slice(0,900)};
+const link=id=>new URL('./?movimiento='+encodeURIComponent(id),global.location.href).href;
+const event=t=>{const v=normalize(t);return {id:eventId(v.id),summary:v.title+' — '+fmt(v.amount),description:'Pago pendiente en Mis Finanzas\\n'+link(v.id),start:{date:v.date},end:{date:nextDay(v.date)},transparency:'transparent',extendedProperties:{private:{source:OWNER,movementId:v.id}},reminders:{useDefault:false,overrides:[{method:'popup',minutes:10080},{method:'popup',minutes:4320},{method:'popup',minutes:1440},{method:'popup',minutes:0}]}}};
+function nextDay(s){const d=new Date(s+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)}
+function create({clientId,readTransactions,onStatus=()=>{}}){
+ if(!clientId||typeof readTransactions!=='function')throw Error('Falta la configuración de Calendar');
+ let token='',expiry=0,calendarId='',running=null,enabled=false,authClient=null;
+ const status=(m)=>{try{onStatus(m)}catch{}};
+ async function request(path,method='GET',body){if(!token||Date.now()>expiry)throw Error('Calendar requiere autorización');const res=await fetch(ROOT+path,{method,headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});if(!res.ok){const err=new Error('Google Calendar HTTP '+res.status);err.status=res.status;throw err}return res.status===204?null:res.json()}
+ function authorize(){return new Promise((resolve,reject)=>{if(!global.google?.accounts?.oauth2)return reject(Error('Google Identity Services no está disponible'));if(!authClient)authClient=global.google.accounts.oauth2.initTokenClient({client_id:clientId,scope:SCOPE,callback:r=>{if(r.error||!r.access_token)return reject(Error(r.error||'No se autorizó Calendar'));token=r.access_token;expiry=Date.now()+(Number(r.expires_in)||3500)*1000;enabled=true;resolve()}});authClient.requestAccessToken({prompt:token?'':'consent'})})}
+ async function getCalendar(){if(calendarId){try{const c=await request('/calendars/'+encodeURIComponent(calendarId));if(c.summary===CAL_NAME)return calendarId}catch(e){if(e.status!==404)throw e}calendarId=''}let pageToken='';do{const q=new URLSearchParams({maxResults:'250',...(pageToken?{pageToken}:{})});const data=await request('/users/me/calendarList?'+q);const found=(data.items||[]).find(x=>x.summary===CAL_NAME&&x.accessRole==='owner');if(found){calendarId=found.id;return calendarId}pageToken=data.nextPageToken||''}while(pageToken);const c=await request('/calendars','POST',{summary:CAL_NAME,timeZone:'America/Bogota',description:'Recordatorios privados creados por Mis Finanzas'});calendarId=c.id;return calendarId}
+ async function listEvents(){const out=[];let pageToken='';do{const q=new URLSearchParams({maxResults:'2500',showDeleted:'false',singleEvents:'true',...(pageToken?{pageToken}:{})});const r=await request('/calendars/'+encodeURIComponent(calendarId)+'/events?'+q);out.push(...(r.items||[]).filter(x=>x.extendedProperties?.private?.source===OWNER));pageToken=r.nextPageToken||''}while(pageToken);return out}
+ async function reconcile(){if(!enabled)return {skipped:'not-authorized'};if(running)return running;running=(async()=>{const transactions=readTransactions();if(!Array.isArray(transactions))throw Error('Los movimientos no están disponibles');await getCalendar();const remote=await listEvents(),local=new Map(transactions.filter(eligible).map(t=>[String(t.id),t]));let created=0,updated=0,removed=0;for(const old of remote){const id=old.extendedProperties?.private?.movementId;const t=local.get(id);if(!t){await request('/calendars/'+encodeURIComponent(calendarId)+'/events/'+encodeURIComponent(old.id),'DELETE');removed++;continue}const expected=event(t);if(old.summary!==expected.summary||old.start?.date!==expected.start.date||old.description!==expected.description){await request('/calendars/'+encodeURIComponent(calendarId)+'/events/'+encodeURIComponent(old.id),'PATCH',{summary:expected.summary,description:expected.description,start:expected.start,end:expected.end,reminders:expected.reminders});updated++}local.delete(id)}for(const t of local.values()){try{await request('/calendars/'+encodeURIComponent(calendarId)+'/events','POST',event(t));created++}catch(e){if(e.status!==409)throw e}}status('Calendar sincronizado');return {created,updated,removed}})();try{return await running}catch(e){status('Calendar pendiente: '+e.message);throw e}finally{running=null}}
+ return {authorize,reconcile,disable(){enabled=false;token='';expiry=0;status('Calendar desconectado')},get enabled(){return enabled},get scope(){return SCOPE}};
+}
+global.MisFinanzasCalendar={create,eligible,event};
+})(window);
