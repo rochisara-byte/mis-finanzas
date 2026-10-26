@@ -8,13 +8,15 @@ El service worker guarda solo el shell de la aplicación: la entrada, `index.htm
 
 ## Actualizaciones
 
-`CACHE_VERSION` en `sw.js` debe incrementarse cada vez que cambie el HTML o cualquiera de los recursos precargados. La instalación de una versión nueva solo termina cuando todos esos recursos se han descargado. Si falla alguno, el worker anterior permanece activo y su shell sigue disponible sin conexión.
+`CACHE_VERSION` en `sw.js` debe incrementarse cada vez que cambie el HTML, el manifest o cualquiera de los recursos precargados. `SHELL_DIGEST` fija la huella SHA-256 de esos archivos. La comprobación obligatoria `node tests/pwa-cache.test.js` (también ejecutada en la PR por GitHub Actions) falla si la huella no coincide o si cambia frente al worker anterior sin aumentar `CACHE_VERSION`. Para actualizar el shell, aumenta el número y calcula la nueva huella con el mismo orden y delimitadores que usa la prueba. La instalación de una versión nueva solo termina cuando todos esos recursos se han descargado. Si falla alguno, el worker anterior permanece activo y su shell sigue disponible sin conexión.
 
 Una versión instalada espera a que se cierren las ventanas que usan la anterior. No se usa `skipWaiting` ni `clients.claim`, para evitar cambiar el código de una sesión financiera abierta. Al activarse, elimina solo cachés anteriores cuyo nombre empieza por `mis-finanzas-shell-v`; no elimina datos de usuario ni otros cachés. Una página controlada carga el HTML de su versión ya verificada y cambia a la nueva tras cerrar y abrir la aplicación.
 
 La instalación o actualización nunca reinicia `mis-finanzas-offline-v1`. Aun así, `localStorage` depende del perfil del navegador: borrar manualmente los datos del sitio, usar navegación privada o cambiar de origen puede hacer que los datos locales no estén disponibles. Conviene conservar la exportación JSON.
 
 ## Verificación
+
+`tests/pwa-cache.test.js` comprueba la huella y versión del shell, incluye una prueba negativa de cambio sin aumento de versión y verifica que el worker no responda a solicitudes OAuth ni Google Drive.
 
 `tests/pwa.test.js` inicia un servidor HTTP local bajo `/mis-finanzas/` y utiliza un perfil temporal persistente de Chromium. Usa exclusivamente cuentas y movimientos ficticios y simula una autorización de Google denegada. Comprobó:
 
