@@ -1,20 +1,16 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 
 async function main() {
   const pageHtml = fs.readFileSync(path.join(__dirname, 'calendar-live-sandbox.html'));
-  const server = http.createServer((request, response) => {
-    if (request.url !== '/') { response.writeHead(404); response.end(); return; }
-    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });response.end(pageHtml);
-  });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const browser = await chromium.launch({ headless: true,
     ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}), args: ['--no-sandbox'] });
   try {
     const page = await browser.newPage();
+    await page.route('https://ensayo.example/**', route => route.fulfill({ status: 200,
+      contentType: 'text/html; charset=utf-8', body: pageHtml }));
     const writes = [];
     const calendars = new Map([['existing', { id: 'existing', summary: 'Personal', description: 'No tocar' }]]);
     const events = new Map();
@@ -55,7 +51,7 @@ async function main() {
       }
       return respond(404);
     });
-    await page.goto(`http://127.0.0.1:${server.address().port}/`);
+    await page.goto('https://ensayo.example/');
     await page.locator('#start').click();
     await page.waitForFunction(() => document.querySelector('#log').textContent.includes('RESULTADO: ambas condiciones'));
     assert.equal(await page.locator('#start').isDisabled(), true);
@@ -69,10 +65,16 @@ async function main() {
     assert.equal(calendars.has('existing'), true);
     assert.equal(await page.locator('#start').isEnabled(), true);
     await page.close();
+    const wrongOrigin = await browser.newPage();
+    await wrongOrigin.route('https://rochisara-byte.github.io/**', route => route.fulfill({ status: 200,
+      contentType: 'text/html; charset=utf-8', body: pageHtml }));
+    await wrongOrigin.route('https://accounts.google.com/**', route => route.abort());
+    await wrongOrigin.goto('https://rochisara-byte.github.io/mis-finanzas-calendar-sandbox/');
+    assert.equal(await wrongOrigin.locator('#start').isDisabled(), true);
+    await wrongOrigin.close();
     console.log('ok - ensayo, bloqueo de duplicados, recarga y limpieza solo del calendario temporal');
   } finally {
     await browser.close();
-    await new Promise(resolve => server.close(resolve));
   }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

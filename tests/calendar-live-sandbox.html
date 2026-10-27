@@ -12,7 +12,7 @@ button:disabled{opacity:.5;cursor:not-allowed}pre{white-space:pre-wrap;overflow-
 <p class="warning">La prueba solicita permiso para crear calendarios. Compruebe que la ventana de Google muestra su cuenta antes de aceptar. Al finalizar, pulse <strong>Eliminar calendario de ensayo</strong>.</p>
 <button id="start">Conectar y empezar ensayo</button>
 <button id="cleanup" disabled>Eliminar calendario de ensayo</button>
-<pre id="log" role="status" aria-live="polite">Listo. Esta página solo funciona desde http://127.0.0.1:8768/ con ese origen autorizado en Google Cloud.</pre>
+<pre id="log" role="status" aria-live="polite">Listo. Abre esta página en el sitio HTTPS de ensayo y autoriza exactamente ese origen en Google Cloud.</pre>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
 'use strict';
@@ -21,11 +21,12 @@ const SCOPE='https://www.googleapis.com/auth/calendar.app.created';
 const API='https://www.googleapis.com/calendar/v3';
 const KEY='mis-finanzas-calendar-live-sandbox-v1';
 let token='',expiry=0,busy=false;
+const safeOrigin=location.protocol==='https:'&&location.origin!=='https://rochisara-byte.github.io';
 const log=message=>{document.querySelector('#log').textContent+='\n'+message};
 const safe=value=>encodeURIComponent(value);
 const getRecord=()=>{try{const r=JSON.parse(localStorage.getItem(KEY));return r&&/^MF-CALENDAR-SANDBOX-[0-9a-f-]{36}$/.test(r.marker)&&typeof r.name==='string'&&r.name.startsWith('Mis Finanzas ENSAYO ')&&(!r.id||typeof r.id==='string')?r:null}catch{return null}};
 const saveRecord=r=>localStorage.setItem(KEY,JSON.stringify(r));
-const controls=()=>{const invalid=!!localStorage.getItem(KEY)&&!getRecord();document.querySelector('#start').disabled=busy||!!getRecord()||invalid;document.querySelector('#cleanup').disabled=busy||!getRecord()};
+const controls=()=>{const invalid=!!localStorage.getItem(KEY)&&!getRecord();document.querySelector('#start').disabled=busy||!!getRecord()||invalid||!safeOrigin;document.querySelector('#cleanup').disabled=busy||!getRecord()};
 async function api(route,method='GET',body,etag){
  if(!token||Date.now()>=expiry)throw Error('Autorización vencida. Pulsa el botón para conectar de nuevo.');
  const response=await fetch(API+route,{method,headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{}),...(etag?{'If-Match':etag}:{})},body:body?JSON.stringify(body):undefined});
@@ -114,5 +115,6 @@ document.querySelector('#start').onclick=run;
 document.querySelector('#cleanup').onclick=cleanup;
 if(getRecord())log('Hay un ensayo anterior pendiente. Pulsa Eliminar calendario de ensayo antes de crear otro.');
 else if(localStorage.getItem(KEY))log('El registro local del ensayo está dañado. No se creará otro calendario; pide ayuda para localizar el ensayo anterior.');
+if(!safeOrigin)log('No inicies este ensayo aquí. Usa un sitio HTTPS con origen distinto al de Mis Finanzas.');
 controls();
 </script></body></html>

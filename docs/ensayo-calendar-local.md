@@ -1,26 +1,23 @@
-# Ensayo local de Google Calendar (Windows)
+# Ensayo de Google Calendar desde el navegador
 
-Este ensayo usa la misma cuenta de Google que Mis Finanzas, pero **no carga la aplicación, sus movimientos ni Drive**. Crea un calendario temporal llamado `Mis Finanzas ENSAYO ...` con un evento ficticio y prueba si Google rechaza cambios con un ETag antiguo. Solo elimina ese calendario temporal tras verificar su identificador y marcador. No habilita todavía la sincronización automática en la aplicación.
+Este procedimiento no instala programas ni ejecuta archivos descargados en Windows. Publica **solo una página de ensayo** en un sitio HTTPS temporal y separado. El paquete `tests/calendar-live-sandbox-site.zip` contiene únicamente `index.html`; no contiene la aplicación, movimientos, datos de Drive ni credenciales. La página usa la misma cuenta de Google que Mis Finanzas, pero crea un calendario temporal `Mis Finanzas ENSAYO ...` y un evento ficticio.
 
-## Preparación (una sola vez)
+El sitio temporal tendrá una dirección pública: no compartas el enlace ni subas archivos distintos al ZIP indicado. No uses el dominio de la aplicación publicada (`rochisara-byte.github.io`), porque comparte origen y almacenamiento con Mis Finanzas. La página bloquea el ensayo en ese origen.
 
-1. Descarga la rama `feature/mejora-27-google-calendar` del repositorio como ZIP desde GitHub y descomprímela en tu computador. No abras la versión publicada de Mis Finanzas para hacer el ensayo.
-2. En Google Cloud Console, abre el proyecto OAuth de Mis Finanzas y busca el cliente web cuyo ID termina en `qfvfg50kiajoc50s65kuf88m3i7gqkd6.apps.googleusercontent.com`. En **Orígenes autorizados de JavaScript**, agrega exactamente `http://127.0.0.1:8768` si todavía no está. No agregues secretos al repositorio ni cambies la URL de redirección. Si no tienes acceso a esa configuración, detente y pide ayuda al propietario del proyecto.
-3. Comprueba que Google Calendar API está habilitada y que tu misma cuenta puede autorizar este cliente OAuth. Si la pantalla de consentimiento está en modo de prueba, tu cuenta debe figurar como usuaria de prueba. No aceptes una pantalla que muestre una aplicación o un permiso que no reconozcas.
+## Preparación
 
-## Ejecutar
+1. Abre la rama `feature/mejora-27-google-calendar` en GitHub. En `tests`, descarga **solo** `calendar-live-sandbox-site.zip` mediante **Download raw**. No abras ni ejecutes los antiguos archivos `.cmd` o `.ps1`; ya no forman parte de este método.
+2. En el navegador, entra en [Netlify Drop](https://app.netlify.com/drop) e inicia sesión si lo solicita. Arrastra el ZIP a la zona de publicación. Netlify debe crear un sitio HTTPS cuya página principal diga **Ensayo aislado de Google Calendar**. Este sitio contiene solo la página del ZIP; **no** publiques el repositorio completo ni Mis Finanzas.
+3. Copia el **origen** del sitio, por ejemplo `https://nombre-del-ensayo.netlify.app` (sin la barra final ni rutas). En Google Cloud Console, abre el proyecto OAuth de Mis Finanzas y el cliente web cuyo ID termina en `qfvfg50kiajoc50s65kuf88m3i7gqkd6.apps.googleusercontent.com`. Agrega ese origen exacto a **Orígenes autorizados de JavaScript**. No borres los orígenes que ya existen ni cambies las URL de redirección. Si no administras ese proyecto, detente y pide ayuda a quien lo administre.
+4. Comprueba que Google Calendar API está habilitada y que tu cuenta habitual puede autorizar el cliente. Si la pantalla de consentimiento está en modo de prueba, la cuenta debe figurar como usuaria de prueba.
 
-1. En la carpeta descargada, abre `tests` y haz doble clic en `abrir-ensayo-calendar.cmd`. Usa Windows PowerShell, incluido en Windows; no instala nada. Deja abierta la ventana negra mientras usas la página.
-2. Se abrirá `http://127.0.0.1:8768/` en tu navegador. Si no abre, copia esa dirección en el navegador. Debe decir **Ensayo aislado de Google Calendar**, no la aplicación Mis Finanzas.
-3. Pulsa **Conectar y empezar ensayo** y elige tu cuenta habitual de Google. La página creará un calendario nuevo llamado `Mis Finanzas ENSAYO ...`; no selecciona calendarios existentes.
-4. Espera a ver `RESULTADO` en la página. `Ambas condiciones ETag superadas` significa que las dos precondiciones funcionaron en este ensayo; cualquier otro resultado significa **no habilitar** ediciones ni eliminaciones automáticas.
-5. Pulsa **Eliminar calendario de ensayo**. Espera el mensaje `Calendario temporal eliminado` y comprueba, si quieres, que `Mis Finanzas ENSAYO ...` ya no aparece en Google Calendar. Luego cierra la ventana negra.
+## Ejecutar y limpiar
 
-## Si se interrumpe
+1. Vuelve a la página HTTPS de ensayo. Pulsa **Conectar y empezar ensayo** y comprueba que la ventana de Google muestra tu cuenta y el permiso de Calendar. No aceptes un permiso o una aplicación que no reconozcas.
+2. Espera el texto `RESULTADO`. `Ambas condiciones ETag superadas` indica que los dos intentos con ETag antiguo fueron rechazados en este ensayo. Cualquier otro resultado significa **no habilitar** ediciones ni eliminaciones automáticas en Mis Finanzas.
+3. Pulsa **Eliminar calendario de ensayo** y espera `Calendario temporal eliminado`. No cierres la página antes de este paso.
+4. Después de limpiar, quita el origen temporal de **Orígenes autorizados de JavaScript** y elimina el sitio temporal desde Netlify. Conserva los orígenes de Mis Finanzas.
 
-- No pulses **Conectar y empezar ensayo** otra vez mientras haya un ensayo pendiente. La página lo bloquea para evitar varios calendarios temporales.
-- Si cerraste el navegador, vuelve a abrir el lanzador y la misma dirección **en el mismo perfil de navegador**. Pulsa **Eliminar calendario de ensayo**; Google puede pedir autorización de nuevo.
-- Si falla la limpieza, anota solo el nombre `Mis Finanzas ENSAYO ...` y borra **ese calendario** desde la configuración de Google Calendar, o pide ayuda. No borres otros calendarios. No compartas capturas con tokens ni información privada.
-- Si Google muestra `origin_mismatch` u origen no autorizado, revisa el paso 2 de preparación. No uses `file://` ni publiques la página en GitHub Pages para resolverlo.
+Si se cierra la página antes de limpiar, ábrela otra vez en el **mismo sitio y perfil de navegador**. Recordará el ID temporal y bloqueará un segundo ensayo hasta limpiarlo. Si la limpieza falla, elimina únicamente el calendario cuyo nombre empiece por `Mis Finanzas ENSAYO ` desde la configuración de Google Calendar o solicita ayuda; no borres ningún otro calendario. El ensayo guarda en ese sitio solo el nombre, marcador e ID del calendario temporal. El token OAuth permanece en memoria y desaparece al cerrar la página.
 
-La página guarda en el navegador únicamente el nombre, marcador e ID del calendario de ensayo para recuperarlo tras una recarga. El token de acceso permanece solo en memoria y desaparece al cerrar la página. Los resultados reales deben revisarse antes de levantar la compuerta de seguridad de la PR #18.
+No abras el ZIP con doble clic para iniciar la prueba: `file://` no es un origen OAuth válido. Tampoco basta abrir el HTML dentro de `github.com`, porque Google no autorizará esa página como sitio de ensayo. El sitio HTTPS separado y su origen autorizado son requisitos de Google OAuth.
