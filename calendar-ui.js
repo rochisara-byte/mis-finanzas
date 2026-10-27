@@ -1,31 +1,49 @@
-/* Mejora 27 — interfaz opt-in; sin modificar la base financiera ni el flujo de Drive. */
+/* Optional Calendar controls. OAuth stays separate from Drive. */
 (function(){
 'use strict';
-const DB='mis-finanzas-offline-v1', PREF='mis-finanzas-calendar-v1';
+const DB='mis-finanzas-offline-v1',PREF='mis-finanzas-calendar-v1';
 const CLIENT='977076702377-qfvfg50kiajoc50s65kuf88m3i7gqkd6.apps.googleusercontent.com';
-const read=()=>{try{return JSON.parse(localStorage.getItem(DB))?.transactions||[]}catch{return []}};
+const read=()=>{const raw=localStorage.getItem(DB);if(raw===null)return [];const value=JSON.parse(raw);if(!Array.isArray(value?.transactions))throw Error('Los movimientos locales no están disponibles');return value.transactions};
 const prefs=()=>{try{return JSON.parse(localStorage.getItem(PREF))||{}}catch{return {}}};
-const save=x=>localStorage.setItem(PREF,JSON.stringify({...prefs(),...x}));
-const btn=document.createElement('button');btn.type='button';btn.id='calendarConnectButton';btn.textContent='▦ Calendar';btn.title='Configurar recordatorios de Google Calendar';btn.style.cssText='position:fixed;right:16px;bottom:215px;z-index:6;background:#fff;color:#3567b5;border:1px solid #d8e4f6;border-radius:22px;padding:10px 13px;box-shadow:0 4px 14px #2445791c;font:600 12px Inter,system-ui,sans-serif;cursor:pointer';
-const dialog=document.createElement('dialog');dialog.id='calendarSettings';dialog.style.cssText='border:1px solid #e2e8f0;border-radius:18px;max-width:min(420px,calc(100vw - 32px));width:100%;padding:22px;box-shadow:0 20px 60px #182b4933;color:#27252b';
-dialog.innerHTML='<h2 style="margin:0 0 10px">Recordatorios de Google Calendar</h2><p style="line-height:1.5">Crea eventos para gastos pendientes con vencimiento. Cada pago recurrente se administra por separado. Google Calendar puede mostrar concepto y valor en las notificaciones.</p><p id="calendarStatus" role="status" style="font-size:13px;color:#526480">Desconectado</p><div style="display:flex;flex-wrap:wrap;gap:8px"><button type="button" id="calendarEnable">Conectar y sincronizar</button><button type="button" id="calendarSync">Sincronizar ahora</button><button type="button" id="calendarDisable">Desconectar</button><button type="button" id="calendarClose">Cerrar</button></div><p style="font-size:12px;color:#64748b">La autorización se solicita únicamente al pulsar Conectar. Google Drive funciona por separado.</p>';
-const status=msg=>{dialog.querySelector('#calendarStatus').textContent=msg};
-const engine=window.MisFinanzasCalendar?.create({clientId:CLIENT,readTransactions:read,onStatus:status});
+const save=value=>localStorage.setItem(PREF,JSON.stringify(value));
+const engine=window.MisFinanzasCalendar?.create({clientId:CLIENT,readTransactions:read,loadState:prefs,saveState:save,onStatus:message=>status(message)});
 if(!engine)return;
-const sync=async()=>{if(!engine.enabled)return;try{status('Sincronizando…');const r=await engine.reconcile();status('Al día: '+r.created+' creados, '+r.updated+' actualizados, '+r.removed+' eliminados.')}catch(e){status('Pendiente: '+e.message)}};
-let queued=false;
-const schedule=()=>{if(queued||!engine.enabled)return;queued=true;setTimeout(()=>{queued=false;sync()},1800)};
-window.addEventListener('finanzas-local-save',schedule);
-window.addEventListener('storage',e=>{if(e.key===DB)schedule()});
+const button=document.createElement('button');button.type='button';button.id='calendarConnectButton';button.className='iconbtn';
+button.textContent='▦';button.title='Google Calendar';button.setAttribute('aria-label','Google Calendar');
+const dialog=document.createElement('dialog');dialog.id='calendarSettings';
+dialog.innerHTML='<h2>Recordatorios de Google Calendar</h2><p>Los gastos pendientes pueden aparecer en un calendario privado. Google Calendar mostrará el concepto y el valor.</p><p id="calendarStatus" role="status" aria-live="polite"></p><fieldset><legend>Recordatorios</legend>'+[[20160,'14 días'],[10080,'7 días'],[4320,'3 días'],[1440,'1 día'],[0,'El mismo día']].map(([n,label])=>'<label><input type="checkbox" data-minutes="'+n+'"> '+label+'</label>').join('')+'</fieldset><div class="calendar-actions"><button type="button" id="calendarEnable">Conectar</button><button type="button" id="calendarSync">Sincronizar ahora</button><button type="button" id="calendarDisable">Desconectar</button><button type="button" id="calendarClose">Cerrar</button></div><button type="button" id="calendarDrive" hidden>Abrir Google Drive</button><p class="calendar-note">Calendar solicita un permiso separado de Drive. Tras recargar, puede ser necesario conectar otra vez.</p>';
+const style=document.createElement('style');style.textContent='#calendarSettings{border:1px solid var(--line,#e5e2de);border-radius:16px;max-width:min(420px,calc(100vw - 24px));width:100%;padding:20px;background:var(--paper,#fffaf2);color:var(--ink,#343044);box-shadow:0 15px 48px #182b4933}#calendarSettings::backdrop{background:#201b2380}#calendarSettings h2{font-size:18px;margin:0 0 10px}#calendarSettings p{font-size:13px;line-height:1.5}#calendarSettings fieldset{border:0;padding:8px 0}#calendarSettings legend{font-size:13px;font-weight:700}#calendarSettings label{display:block;font-size:13px;padding:5px 0}#calendarSettings input{accent-color:var(--pink,#ef8fb1)}.calendar-actions{display:flex;flex-wrap:wrap;gap:8px}#calendarSettings button{font:inherit;font-size:12px;border:1px solid var(--line,#e5e2de);border-radius:8px;padding:9px;background:#fff;color:inherit}.calendar-note{color:var(--sub,#777)}#calendarConnectButton{font-size:20px}@media(max-width:390px){#calendarSettings{padding:16px}}';
+document.head.append(style);document.querySelector('.top-actions').append(button);document.body.append(dialog);
+const status=message=>{dialog.querySelector('#calendarStatus').textContent=message};
+const renderReminders=()=>{for(const box of dialog.querySelectorAll('[data-minutes]'))box.checked=engine.reminders.includes(Number(box.dataset.minutes))};
+const setAttention=message=>{status(message);dialog.querySelector('#calendarDrive').hidden=true};
+let timer=0,previous=new Map(read().filter(t=>t?.id).map(t=>[String(t.id),t]));
+const sync=async()=>{if(!engine.enabled)return;if(!engine.authorized){setAttention('Calendar requiere conexión. Pulsa Conectar.');return}
+ try{status('Sincronizando Calendar…');const result=await engine.reconcile();
+  if(result.skipped==='offline'){setAttention('Sin internet. Los cambios de Calendar siguen pendientes.');return}
+  status(result.conflicts?'Revisión necesaria: '+result.conflicts+' movimientos no se modificaron.':'Al día: '+result.created+' creados, '+result.updated+' actualizados, '+result.removed+' eliminados.');
+ }catch(e){setAttention('Calendar pendiente: '+e.message)}};
+const schedule=()=>{if(timer||!engine.enabled)return;timer=setTimeout(()=>{timer=0;sync()},1200)};
+window.addEventListener('finanzas-local-save',()=>{try{const current=new Map(read().filter(t=>t?.id).map(t=>[String(t.id),t]));
+ for(const [id,now] of current){const old=previous.get(id);if(!old)engine.noteCreate(id);else if(JSON.stringify(old)!==JSON.stringify(now))engine.noteChange(id,old,now)}
+ previous=current;schedule();
+ }catch(e){setAttention('Calendar pendiente: '+e.message)}});
+window.addEventListener('finanzas-drive-loaded',()=>{try{previous=new Map(read().filter(t=>t?.id).map(t=>[String(t.id),t]));tryOpenLink();schedule()}catch(e){setAttention(e.message)}});
+window.addEventListener('storage',e=>{if(e.key===DB){try{previous=new Map(read().filter(t=>t?.id).map(t=>[String(t.id),t]));schedule()}catch(err){setAttention(err.message)}}});
 window.addEventListener('online',schedule);
-btn.addEventListener('click',()=>dialog.showModal());
-dialog.querySelector('#calendarClose').addEventListener('click',()=>dialog.close());
-dialog.querySelector('#calendarEnable').addEventListener('click',async()=>{try{status('Esperando autorización…');await engine.authorize();save({enabled:true});await sync()}catch(e){status('No se pudo conectar: '+e.message)}});
-dialog.querySelector('#calendarSync').addEventListener('click',sync);
-dialog.querySelector('#calendarDisable').addEventListener('click',()=>{engine.disable();save({enabled:false});status('Desconectado. Los eventos ya creados permanecen en Calendar.')});
-if(prefs().enabled)status('Vuelve a pulsar Conectar para renovar la autorización de Calendar.');
-document.body.append(btn,dialog);
-// Enlaces directos: abrir el movimiento existente sin modificar su estado.
-const id=new URLSearchParams(location.search).get('movimiento');
-if(id){setTimeout(()=>{const tx=read().find(t=>String(t.id)===id&&!t.deleted);if(!tx){alert('Este movimiento no está disponible en este dispositivo. Sincroniza Google Drive e inténtalo de nuevo.');return}const candidates=[...document.querySelectorAll('[data-id]')];const row=candidates.find(n=>n.dataset.id===id&&n.classList.contains('transaction'));if(row){row.scrollIntoView({block:'center'});row.style.outline='2px solid #3b82f6';const edit=row.querySelector('[data-action="edit"]');if(edit)edit.click();else row.click()}else{alert('El movimiento existe, pero no está visible con los filtros actuales. Búscalo en Mis Finanzas: '+tx.title)}},1100)}
+button.onclick=()=>{renderReminders();dialog.showModal()};
+dialog.querySelector('#calendarClose').onclick=()=>dialog.close();
+dialog.querySelector('#calendarEnable').onclick=async()=>{try{status('Esperando autorización…');await engine.authorize();await sync()}catch(e){setAttention('No se pudo conectar: '+e.message)}};
+dialog.querySelector('#calendarSync').onclick=sync;
+dialog.querySelector('#calendarDisable').onclick=()=>{engine.disable();setAttention('Desconectado. Los eventos existentes permanecen en Calendar.')};
+dialog.querySelector('#calendarDrive').onclick=()=>{dialog.close();window.dispatchEvent(new Event('finanzas-open-drive-panel'))};
+dialog.querySelector('fieldset').onchange=()=>{try{const minutes=[...dialog.querySelectorAll('[data-minutes]:checked')].map(x=>Number(x.dataset.minutes));engine.setReminders(minutes,read());schedule();status('Recordatorios pendientes de sincronización.')}catch(e){renderReminders();setAttention(e.message)}};
+if(prefs().enabled)status('Conecta Calendar para renovar la autorización. Los cambios locales permanecen pendientes.');else status('Desconectado');
+const movementId=new URLSearchParams(location.search).get('movimiento');
+function tryOpenLink(){if(!movementId)return;let t;try{t=read().find(x=>String(x.id)===movementId&&!x.deleted)}catch{}
+ if(t){dialog.close();window.dispatchEvent(new CustomEvent('finanzas-open-movement',{detail:movementId}));return}
+ status('Este movimiento no está en este dispositivo. Sincroniza Google Drive y vuelve a abrirlo.');
+ dialog.querySelector('#calendarDrive').hidden=false;if(!dialog.open)dialog.showModal();
+}
+if(movementId)queueMicrotask(tryOpenLink);
 })();

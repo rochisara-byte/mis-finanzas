@@ -4,7 +4,7 @@
 
 La aplicación se sirve desde `/mis-finanzas/` en GitHub Pages. El manifest usa rutas relativas a su propio archivo, por lo que `start_url`, `scope` e íconos resuelven bajo ese prefijo. El navegador registra `./sw.js` con el mismo alcance. La PWA requiere HTTPS en producción; `localhost` se usa únicamente para pruebas.
 
-El service worker guarda solo el shell de la aplicación: la entrada, `index.html`, manifest e íconos. No lee ni escribe `localStorage` y no intercepta solicitudes de otro origen ni rutas fuera de esa lista. Las llamadas a Google Identity Services y Google Drive siguen pasando directamente por la red y conservan el flujo OAuth y la resolución de conflictos existentes.
+El service worker guarda solo el shell de la aplicación: la entrada, `index.html`, manifest, scripts locales de Calendar e íconos. No lee ni escribe `localStorage` y no intercepta solicitudes de otro origen ni rutas fuera de esa lista. Las llamadas a Google Identity Services, Google Calendar y Google Drive siguen pasando directamente por la red.
 
 ## Actualizaciones
 
@@ -21,7 +21,7 @@ La instalación o actualización nunca reinicia `mis-finanzas-offline-v1`. Aun a
 `tests/pwa.test.js` inicia un servidor HTTP local bajo `/mis-finanzas/` y utiliza un perfil temporal persistente de Chromium. Usa exclusivamente cuentas y movimientos ficticios y simula una autorización de Google denegada. Comprobó:
 
 - Manifest, alcance, íconos PNG y ausencia de errores de instalabilidad en Chromium.
-- Worker activo y caché limitado a seis recursos propios.
+- Worker activo y caché limitado a ocho recursos propios.
 - Apertura, cuatro secciones, registro y persistencia tras cerrar y reabrir sin conexión.
 - Actualización interrumpida por fallo de un recurso: la versión previa sigue abriendo sin conexión y conserva el movimiento.
 - Actualización posterior completa: el nuevo shell se activa al cerrar la ventana, sin perder el movimiento.

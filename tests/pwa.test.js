@@ -12,6 +12,8 @@ const files = new Map([
   ['', ['index.html', 'text/html; charset=utf-8']],
   ['index.html', ['index.html', 'text/html; charset=utf-8']],
   ['manifest.webmanifest', ['manifest.webmanifest', 'application/manifest+json']],
+  ['calendar-sync.js', ['calendar-sync.js', 'text/javascript; charset=utf-8']],
+  ['calendar-ui.js', ['calendar-ui.js', 'text/javascript; charset=utf-8']],
   ['sw.js', ['sw.js', 'text/javascript; charset=utf-8']],
   ['icons/icon-192.png', ['icons/icon-192.png', 'image/png']],
   ['icons/icon-512.png', ['icons/icon-512.png', 'image/png']],
@@ -129,7 +131,7 @@ async function main() {
       const cache = await caches.open(keys.find(name => name.startsWith('mis-finanzas-shell-v')));
       return (await cache.keys()).map(request => request.url);
     });
-    assert.equal(cacheUrls.length, 6);
+    assert.equal(cacheUrls.length, 8);
     assert.ok(cacheUrls.every(url => url.startsWith(address)));
     assert.ok(cacheUrls.every(url => !/googleapis|accounts\.google/.test(url)));
     await context.route('https://www.googleapis.com/**', route => route.fulfill({
