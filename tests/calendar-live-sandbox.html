@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ensayo aislado de Google Calendar · Mis Finanzas</title>
+<style>
+body{font:16px system-ui;margin:2rem auto;padding:0 1rem;max-width:740px;line-height:1.5;color:#202633}
+button{padding:.7rem 1rem;border-radius:8px;border:1px solid #a9b3c5;background:#fff;color:inherit;cursor:pointer;margin:.2rem}
+button:disabled{opacity:.5;cursor:not-allowed}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f6fa;padding:1rem;border-radius:8px}
+.warning{border-left:4px solid #d58c20;padding:.4rem .8rem;background:#fff8e9}strong{color:#9a332d}
+</style></head>
+<body><h1>Ensayo aislado de Google Calendar</h1>
+<p>Puede usar su cuenta habitual. Esta página no lee Mis Finanzas ni Google Drive. Crea <strong>un calendario temporal nuevo</strong> y un evento ficticio para comprobar las condiciones ETag. No modifica calendarios existentes.</p>
+<p class="warning">La prueba solicita permiso para crear calendarios. Compruebe que la ventana de Google muestra su cuenta antes de aceptar. Al finalizar, pulse <strong>Eliminar calendario de ensayo</strong>.</p>
+<button id="start">Conectar y empezar ensayo</button>
+<button id="cleanup" disabled>Eliminar calendario de ensayo</button>
+<pre id="log" role="status" aria-live="polite">Listo. Abre esta página en el sitio HTTPS de ensayo y autoriza exactamente ese origen en Google Cloud.</pre>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+'use strict';
+const CLIENT_ID='977076702377-qfvfg50kiajoc50s65kuf88m3i7gqkd6.apps.googleusercontent.com';
+const SCOPE='https://www.googleapis.com/auth/calendar.app.created';
+const API='https://www.googleapis.com/calendar/v3';
+const KEY='mis-finanzas-calendar-live-sandbox-v1';
+let token='',expiry=0,busy=false;
+const safeOrigin=location.protocol==='https:'&&location.origin!=='https://rochisara-byte.github.io';
+const log=message=>{document.querySelector('#log').textContent+='\n'+message};
+const safe=value=>encodeURIComponent(value);
+const getRecord=()=>{try{const r=JSON.parse(localStorage.getItem(KEY));return r&&/^MF-CALENDAR-SANDBOX-[0-9a-f-]{36}$/.test(r.marker)&&typeof r.name==='string'&&r.name.startsWith('Mis Finanzas ENSAYO ')&&(!r.id||typeof r.id==='string')?r:null}catch{return null}};
+const saveRecord=r=>localStorage.setItem(KEY,JSON.stringify(r));
+const controls=()=>{const invalid=!!localStorage.getItem(KEY)&&!getRecord();document.querySelector('#start').disabled=busy||!!getRecord()||invalid||!safeOrigin;document.querySelector('#cleanup').disabled=busy||!getRecord()};
+async function api(route,method='GET',body,etag){
+ if(!token||Date.now()>=expiry)throw Error('Autorización vencida. Pulsa el botón para conectar de nuevo.');
+ const response=await fetch(API+route,{method,headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{}),...(etag?{'If-Match':etag}:{})},body:body?JSON.stringify(body):undefined});
+ const data=response.status===204?null:await response.json().catch(()=>null);
+ return {status:response.status,ok:response.ok,data};
+}
+const must=(r,label)=>{if(!r.ok)throw Error(label+': HTTP '+r.status);return r.data};
+function authorize(){return new Promise((resolve,reject)=>{
+ if(!window.google?.accounts?.oauth2)return reject(Error('Google Identity Services no está disponible. Comprueba la conexión y vuelve a intentar.'));
+ const client=google.accounts.oauth2.initTokenClient({client_id:CLIENT_ID,scope:SCOPE,callback:r=>{
+  if(r.error||!r.access_token)return reject(Error(r.error||'Google no concedió el permiso'));
+  if(r.scope&&!r.scope.split(' ').includes(SCOPE))return reject(Error('Google no concedió el permiso de Calendar solicitado'));
+  token=r.access_token;expiry=Date.now()+Number(r.expires_in||3500)*1000;resolve();
+ }});
+ client.requestAccessToken({prompt:'consent'});
+})}
+async function findTemporary(r){
+ let pageToken='',seen=new Set(),matches=[];
+ do{
+  const data=must(await api('/users/me/calendarList?'+new URLSearchParams({maxResults:'250',...(pageToken?{pageToken}:{})})),'Buscar calendario temporal');
+  if(!Array.isArray(data.items))throw Error('La lista de calendarios está incompleta');
+  for(const candidate of data.items.filter(c=>c.summary===r.name)){
+   const checked=await api('/calendars/'+safe(candidate.id));
+   if(checked.ok&&checked.data?.description===r.marker)matches.push(candidate.id);
+  }
+  pageToken=data.nextPageToken||'';
+  if(pageToken&&seen.has(pageToken))throw Error('Paginación de Google Calendar inválida');
+  seen.add(pageToken);
+ }while(pageToken);
+ if(matches.length!==1)throw Error(matches.length?'Hay varios ensayos con el mismo marcador':'Aún no se encuentra el calendario temporal. Espera y reintenta.');
+ r.id=matches[0];saveRecord(r);return r.id;
+}
+async function verifiedCalendar(r){
+ if(!r.id)await findTemporary(r);
+ const data=must(await api('/calendars/'+safe(r.id)),'Verificar calendario temporal');
+ if(data.summary!==r.name||data.description!==r.marker)throw Error('El ID ya no corresponde a este ensayo. No se modificó ningún calendario.');
+ return r.id;
+}
+async function run(){
+ if(busy||getRecord())return;busy=true;controls();
+ try{
+  log('Solicitando permiso de Google Calendar…');await authorize();
+  const nonce=crypto.randomUUID(),r={marker:'MF-CALENDAR-SANDBOX-'+nonce,name:'Mis Finanzas ENSAYO '+nonce.slice(0,8),id:null};
+  saveRecord(r);
+  const created=must(await api('/calendars','POST',{summary:r.name,description:r.marker,timeZone:'America/Bogota'}),'Crear calendario temporal');
+  if(!created?.id)throw Error('Google no confirmó el ID. Usa Eliminar para buscar el ensayo; no inicies otro.');
+  r.id=created.id;saveRecord(r);await verifiedCalendar(r);
+  log('Calendario temporal creado: '+r.name);
+  const day=new Date(Date.now()+86400000).toISOString().slice(0,10);
+  const next=new Date(Date.now()+172800000).toISOString().slice(0,10);
+  const route='/calendars/'+safe(r.id)+'/events';
+  const ev=must(await api(route,'POST',{summary:'Pago FICTICIO del ensayo',start:{date:day},end:{date:next}}),'Crear evento ficticio');
+  const eventRoute=route+'/'+safe(ev.id);
+  const original=must(await api(eventRoute),'Leer evento');
+  if(!original.etag)throw Error('Google no devolvió ETag');
+  log('Evento ficticio y ETag verificados.');
+  await verifiedCalendar(r);
+  const first=await api(eventRoute,'PATCH',{summary:'Primera edición FICTICIA'},original.etag);
+  must(first,'Primera edición con ETag');
+  const stale=await api(eventRoute,'PATCH',{summary:'Edición obsoleta - no debe aplicarse'},original.etag);
+  const current=must(await api(eventRoute),'Comprobar edición');
+  const patchSafe=stale.status===412&&current.summary==='Primera edición FICTICIA';
+  log('Edición con ETag antiguo: HTTP '+stale.status+' → '+(patchSafe?'segura':'NO SEGURA'));
+  if(!patchSafe){log('PRUEBA NO SUPERADA. No se probará la eliminación.');return}
+  await verifiedCalendar(r);
+  const deletion=await api(eventRoute,'DELETE',undefined,original.etag);
+  const after=await api(eventRoute);
+  const deleteSafe=deletion.status===412&&after.status===200;
+  log('Eliminación con ETag antiguo: HTTP '+deletion.status+' → '+(deleteSafe?'segura':'NO SEGURA'));
+  log(patchSafe&&deleteSafe?'RESULTADO: ambas condiciones ETag superadas en este ensayo.':'RESULTADO: no habilitar ediciones ni eliminaciones automáticas.');
+ }catch(e){log('Error: '+e.message);log('El ensayo puede seguir existiendo. Usa Eliminar calendario de ensayo.')}
+ finally{busy=false;controls()}
+}
+async function cleanup(){
+ const r=getRecord();if(busy||!r)return;busy=true;controls();
+ try{
+  if(!token||Date.now()>=expiry)await authorize();
+  await verifiedCalendar(r);
+  const result=await api('/calendars/'+safe(r.id),'DELETE');
+  must(result,'Eliminar solo el calendario temporal verificado');
+  localStorage.removeItem(KEY);log('Calendario temporal eliminado. Ningún otro calendario se tocó.');
+ }catch(e){log('No se pudo limpiar: '+e.message);log('El ensayo sigue identificado como '+r.name+'. Reintenta o elimínalo manualmente en Google Calendar.')}
+ finally{busy=false;controls()}
+}
+document.querySelector('#start').onclick=run;
+document.querySelector('#cleanup').onclick=cleanup;
+if(getRecord())log('Hay un ensayo anterior pendiente. Pulsa Eliminar calendario de ensayo antes de crear otro.');
+else if(localStorage.getItem(KEY))log('El registro local del ensayo está dañado. No se creará otro calendario; pide ayuda para localizar el ensayo anterior.');
+if(!safeOrigin)log('No inicies este ensayo aquí. Usa un sitio HTTPS con origen distinto al de Mis Finanzas.');
+controls();
+</script></body></html>

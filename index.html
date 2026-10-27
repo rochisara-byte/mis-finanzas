@@ -311,6 +311,7 @@ const syncDesktopNav=()=>{desktopNav.innerHTML=document.getElementById('nav').in
 if(typeof MutationObserver!=='undefined')new MutationObserver(syncDesktopNav).observe(document.getElementById('nav'),{childList:true});
 desktopLayout.addEventListener('change',()=>{const modal=document.getElementById('modal');if(desktopLayout.matches)mountDesktopQuick();else{parkedQuick=null;if(modal.dataset.inlineQuick==='true'){modal.innerHTML='';modal.dataset.inlineQuick='false'}}});
 document.addEventListener('change',e=>{if(e.target.id==='proj'||e.target.id==='until')saveProjectionPreferences()});
+window.addEventListener('finanzas-open-movement',e=>{const id=e.detail;if(typeof id==='string'&&db.transactions.some(t=>t.id===id&&!t.deleted))actionMenu(id)});
 if('serviceWorker'in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./sw.js').catch(()=>{});render();syncDesktopNav();mountDesktopQuick();
 </script><style>
 #driveSyncButton{position:fixed;z-index:5;bottom:164px;right:max(19px,calc((100vw - 440px)/2));height:39px;border-radius:22px;padding:0 12px;border:1px solid #d9e4fb;background:#fff;color:#3868ba;box-shadow:0 4px 14px #2445791c;font-weight:650;font-size:12px;display:flex;align-items:center;gap:7px}#driveSyncButton .sync-dot{height:8px;width:8px;border-radius:50%;background:#a7acb8}#driveSyncButton.connected .sync-dot{background:#3da980}#driveSyncButton.problem .sync-dot{background:#ed9c47}.drive-box{display:grid;gap:12px}.drive-box input{width:100%;border:1px solid #dedee9;border-radius:12px;padding:12px;background:white}.drive-box p{font-size:13px;line-height:1.5;color:#667085;margin:0}.drive-box button{min-height:45px}.drive-box .danger-text{color:#bd4c5c}@media(max-width:400px){#driveSyncButton{right:15px}}
@@ -552,4 +553,4 @@ if(cfg().clientId){
 }
 })();
 </script>
-<script src="https://accounts.google.com/gsi/client" async defer></script></body></html>
+<script src="./calendar-sync.js"></script><script src="./calendar-ui.js"></script><script src="https://accounts.google.com/gsi/client" async defer></script></body></html>
