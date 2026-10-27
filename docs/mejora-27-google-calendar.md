@@ -19,6 +19,7 @@ El diario `mis-finanzas-calendar-v1` guarda solo autorización deseada, ID del c
 
 ## Verificación
 
+- [Ensayo local aislado para Google Calendar real](ensayo-calendar-local.md): usa un calendario temporal, datos ficticios y un lanzador Windows sin instalar programas. No usa la aplicación ni Drive.
 - `node tests/calendar-sync.test.js`: creación, edición, pago, reversión, borrado lógico, ocurrencia futura, reintento, respuesta perdida, paginación, recordatorios, dos dispositivos, copia atrasada, conflicto y desconexión simulados.
 - `CHROMIUM_PATH=/usr/bin/chromium node tests/calendar-ui.test.js`: enlace a ficha y opción de Drive para movimiento ausente en 390 y 1280 px con datos ficticios.
 - Ejecutar además `tests/pwa-cache.test.js`, `tests/pwa.test.js`, `tests/drive-sync.test.js`, `tests/recurrence.test.js` y `tests/desktop-layout.test.js` antes de integrar.
