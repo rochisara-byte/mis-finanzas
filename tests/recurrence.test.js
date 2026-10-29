@@ -89,6 +89,13 @@ globalThis.__finanzasTest = {
   set db(value) { db = value; },
   mark,
   nextDate,
+  habitualAmount,
+  prepareRecurrenceSave,
+  setHabitualAmount,
+  createNextOccurrence,
+  groupTransactions,
+  setAgendaPeriod(value) { agendaPeriod = value; },
+  setHistoryMode(value) { historyMode = value; },
   accountBalance,
   total,
   due,
@@ -136,6 +143,7 @@ function tx(overrides = {}) {
     list: 'home',
     status: 'pending',
     repeat: 'monthly',
+    recurrenceAmount: 100,
     notes: '',
     linkKind: '',
     linkId: '',
@@ -347,4 +355,81 @@ test('recurrence relationship persists after saving and reloading', () => {
   assert.strictEqual(transactions.length, 2);
   assert.strictEqual(source.generatedNextId, child.id);
   assert.strictEqual(child.recurrenceParentId, 'r1');
+});
+
+test('an exceptional paid amount never becomes the next monthly habitual amount', () => {
+  const app = runApp();
+  setDb(app, baseDb({ transactions: [tx({ id: 'utility', amount: 80, recurrenceAmount: 100 })] }));
+  app.__finanzasTest.mark('utility');
+  const [paid, next] = app.__finanzasTest.db.transactions;
+  assert.strictEqual(paid.amount, 80);
+  assert.strictEqual(next.amount, 100);
+  assert.strictEqual(next.recurrenceAmount, 100);
+  app.__finanzasTest.mark('utility');
+  app.__finanzasTest.mark('utility');
+  assert.strictEqual(app.__finanzasTest.db.transactions.length, 2);
+  assert.strictEqual(next.amount, 100);
+});
+
+test('custom recurrence and habitual change preserve individual future exceptions', () => {
+  const root = tx({ id: 'custom', repeat: 'weeks:2', date: '2027-01-01', status: 'done', amount: 80, recurrenceAmount: 100 });
+  const normal = tx({ id: 'normal', date: '2027-01-15', repeat: 'weeks:2', amount: 100, recurrenceAmount: 100, recurrenceParentId: 'custom', recurrenceRootId: 'custom' });
+  const exception = tx({ id: 'exception', date: '2027-01-29', repeat: 'weeks:2', amount: 65, amountAdjusted: true, recurrenceAmount: 100, recurrenceParentId: 'normal', recurrenceRootId: 'custom' });
+  const app = runApp();
+  setDb(app, baseDb({ transactions: [root, normal, exception] }));
+  app.__finanzasTest.setHabitualAmount(app.__finanzasTest.db.transactions[0], 120);
+  const [savedRoot, savedNormal, savedException] = app.__finanzasTest.db.transactions;
+  assert.strictEqual(savedRoot.amount, 80);
+  assert.strictEqual(savedNormal.amount, 120);
+  assert.strictEqual(savedException.amount, 65);
+  assert.strictEqual(savedException.recurrenceAmount, 120);
+  app.__finanzasTest.mark('exception');
+  const child = app.__finanzasTest.db.transactions.find(t => t.recurrenceParentId === 'exception');
+  assert.strictEqual(child.amount, 120);
+  assert.strictEqual(child.date, '2027-02-12');
+});
+
+test('ambiguous legacy recurring amount requires review, without changing history', () => {
+  const old = tx({ id: 'old', amount: 80, recurrenceAmount: undefined, status: 'done' });
+  const pending = tx({ id: 'old-next', amount: 100, recurrenceAmount: undefined, recurrenceParentId: 'old', date: '2027-01-01' });
+  const app = runApp();
+  setDb(app, baseDb({ transactions: [old, pending] }));
+  const [source, next] = app.__finanzasTest.db.transactions;
+  assert.strictEqual(app.__finanzasTest.habitualAmount(next), null);
+  assert.strictEqual(app.__finanzasTest.createNextOccurrence(next), null);
+  assert.strictEqual(app.__finanzasTest.db.transactions.length, 2);
+  assert.throws(() => app.__finanzasTest.prepareRecurrenceSave({ ...next }, next, ''), /valor habitual/);
+  assert.strictEqual(source.amount, 80);
+  app.__finanzasTest.setHabitualAmount(next, 100);
+  assert.strictEqual(source.amount, 80);
+  assert.strictEqual(app.__finanzasTest.habitualAmount(next), 100);
+});
+
+test('agenda hides completed from pending and history keeps them accessible', () => {
+  const day = new Date().toLocaleDateString('en-CA');
+  const app = runApp();
+  setDb(app, baseDb({ transactions: [
+    tx({ id: 'pending', date: day, repeat: '', status: 'pending' }),
+    tx({ id: 'done', date: day, repeat: '', status: 'done', completedAt: new Date().toISOString() }),
+  ] }));
+  let html = app.__finanzasTest.groupTransactions();
+  assert.match(html, /Completados/);
+  assert.match(html, /data-id="pending"/);
+  assert.doesNotMatch(html, /data-id="done"/);
+  app.__finanzasTest.setHistoryMode(true);
+  html = app.__finanzasTest.groupTransactions();
+  assert.match(html, /data-id="pending"/);
+  assert.match(html, /data-id="done"/);
+});
+
+test('all-period agenda and history render a bounded batch from a large archive', () => {
+  const app = runApp();
+  const rows = Array.from({ length: 2000 }, (_, i) => tx({
+    id: `large-${i}`, repeat: '', status: 'pending', date: '2027-12-31',
+  }));
+  setDb(app, baseDb({ transactions: rows }));
+  app.__finanzasTest.setAgendaPeriod('all');
+  assert.strictEqual((app.__finanzasTest.groupTransactions().match(/class="item transaction"/g) || []).length, 100);
+  app.__finanzasTest.setHistoryMode(true);
+  assert.strictEqual((app.__finanzasTest.groupTransactions().match(/class="item transaction"/g) || []).length, 100);
 });

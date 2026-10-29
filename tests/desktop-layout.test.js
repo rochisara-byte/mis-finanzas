@@ -170,12 +170,13 @@ async function main() {
     assert.equal((await records(page)).filter(t => t.title === 'Ingreso ficticio' && t.type === 'income').length, 1);
     await page.locator('#modal [name="type"]').selectOption('transfer');
     await page.locator('#quickEntry').fill('Traslado ficticio 1000');
-    await page.locator('#modal .quick-details summary').click();
+    await page.locator('#modal .quick-details > summary').click();
     await page.locator('#modal [name="toAccount"]').selectOption('banco');
     await page.locator('#modal .quick-save').click();
     await page.waitForFunction(key => JSON.parse(localStorage.getItem(key)).transactions.some(t => t.title === 'Traslado ficticio'), key);
     assert.equal((await records(page)).filter(t => t.title === 'Traslado ficticio' && t.type === 'transfer' && t.toAccount === 'banco').length, 1);
     await page.locator('#desktopNav [data-page="Inicio"]').click();
+    await page.locator('[data-action="showHistory"]').click();
     await page.locator('.transaction[data-id="gasto-1"] [data-action="actions"]').click();
     await page.locator('[data-action="edit"][data-id="gasto-1"]').click();
     assert.equal(await page.locator('#modal[data-inline-quick=false] .quick-head').count(), 1);
