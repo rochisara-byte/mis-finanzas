@@ -56,8 +56,12 @@ async function run(width) {
     assert.equal(await page.locator('.agenda-group .transaction').count(), 5);
     assert.equal(await page.locator('.agenda-group').first().locator('.date-group').count(), 2);
     assert.equal(await page.locator('.agenda-completed [data-action="toggleCompleted"]').getAttribute('aria-expanded'), 'false');
-    assert.equal(await page.locator('.agenda-main-head').evaluate(el => getComputedStyle(el).backgroundColor),
-      await page.locator('.agenda-completed-toggle').evaluate(el => getComputedStyle(el).backgroundColor));
+    for (const selector of ['.agenda-main-head', '.agenda-completed-toggle']) {
+      assert.equal(await page.locator(selector).evaluate(el => getComputedStyle(el).backgroundColor), 'rgba(0, 0, 0, 0)');
+      assert.equal(await page.locator(selector).evaluate(el => getComputedStyle(el).borderBottomWidth), '2px');
+    }
+    assert.equal(await page.locator('.agenda-main-head select').count(), 0);
+    assert.equal(await page.locator('.filters-panel #agendaPeriod').count(), 1);
     assert.equal(await page.locator('.agenda-history').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(243, 245, 249)');
     assert.equal(await page.locator('.agenda-pending-toggle').getAttribute('aria-expanded'), 'true');
     await page.locator('.agenda-pending-toggle').click();
@@ -94,11 +98,24 @@ async function run(width) {
     await page.locator('[data-filter="Gastos"]').click();
     assert.equal(await page.locator('[data-month="late:2026-11"]').getAttribute('aria-expanded'), 'false');
     await page.locator('[data-filter="Todos"]').click();
+    await page.locator('#searchToggle').click();
+    await page.locator('#search').pressSequentially('Movimiento ficticio');
+    assert.equal(await page.locator('#agendaPeriod').count(), 1);
+    assert.equal(await page.locator('.agenda-main-head select').count(), 0);
     await page.locator('#agendaPeriod').selectOption('7');
+    assert.equal(await page.locator('.agenda-group .transaction').count(), 4);
+    assert.equal(await page.locator('.agenda-group').first().locator('.transaction').count(), 2);
+    assert.equal(await page.locator('#search').inputValue(), 'Movimiento ficticio');
+    assert.equal(await page.locator('#search').evaluate(el => document.activeElement === el), true);
+    assert.equal(await page.locator('#search').evaluate(el => el.selectionStart), 'Movimiento ficticio'.length);
+    assert.equal(await page.locator('.filters-panel').evaluate(el => el.open), true);
     assert.equal(await page.locator('[data-month="late:2026-11"]').getAttribute('aria-expanded'), 'false');
     await page.locator('#agendaPeriod').selectOption('30');
-    await page.locator('#searchToggle').click();
-    await page.locator('#search').pressSequentially('Movimiento ficticio today');
+    assert.equal(await page.locator('.agenda-group .transaction').count(), 5);
+    await page.locator('#agendaPeriod').selectOption('all');
+    assert.equal(await page.locator('.agenda-group .transaction').count(), 5);
+    assert.equal(await page.locator('#search').evaluate(el => document.activeElement === el), true);
+    await page.locator('#search').pressSequentially(' today');
     assert.equal(await page.locator('.filters-panel').evaluate(el => el.open), true);
     assert.equal(await page.locator('#main .transaction').count(), 1);
     await page.locator('#search').fill('');
@@ -172,6 +189,7 @@ async function runDense(width) {
     dense.transactions.push({ ...tx('abono', '2026-11-14', 'done', 'expense', 50), linkKind: 'debt', linkId: 'debt-0' });
     await page.addInitScript(({ key, dense }) => localStorage.setItem(key, JSON.stringify(dense)), { key, dense });
     await page.goto(url);
+    await page.locator('#searchToggle').click();
     await page.locator('#agendaPeriod').selectOption('all');
     assert.deepEqual(await page.locator('[data-group="next:"] + .agenda-group-body .month-toggle span').allTextContents(),
       ['noviembre de 2026', 'diciembre de 2026', 'enero de 2027']);

@@ -131,6 +131,7 @@ async function run(width) {
     await page.evaluate(({key,day})=>{const db=JSON.parse(localStorage.getItem(key));db.transactions=Array.from({length:24},(_,i)=>({id:`many-${i}`,type:'expense',title:`Pendiente ficticio ${i}`,amount:10+i,date:i<8?'2020-01-01':i<16?day:'2030-01-01',account:'cash',status:'pending',repeat:'',created:new Date().toISOString()}));localStorage.setItem(key,JSON.stringify(db))},{key,day});
     await page.reload();
     assert.equal(await page.locator('.agenda-main-head h3').textContent().then(s=>s.trim()), 'Pendientes 16');
+    await page.locator('#searchToggle').click();
     await page.locator('#agendaPeriod').selectOption('30');
     assert.equal(await page.locator('.agenda-main-head h3').textContent().then(s=>s.trim()), 'Pendientes 16');
     await page.locator('#agendaPeriod').selectOption('all');
