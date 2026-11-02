@@ -64,6 +64,15 @@ async function run(width) {
     assert.equal(await page.locator('.filters-panel #agendaPeriod').count(), 1);
     assert.equal(await page.locator('.agenda-history').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(243, 245, 249)');
     assert.equal(await page.locator('.agenda-pending-toggle').getAttribute('aria-expanded'), 'true');
+    for (const selector of ['[data-group="late:"]', '[data-group="today:"]', '[data-group="next:"]', '.month-toggle', '.date-toggle']) {
+      for (const control of await page.locator(selector).all()) assert.equal(await control.getAttribute('aria-expanded'), 'false');
+    }
+    assert.equal(await page.locator('.agenda-group .transaction:visible').count(), 0);
+    await capture('inicio');
+    for (const control of await page.locator('.agenda-group-toggle').all()) await control.click();
+    for (const control of await page.locator('.month-toggle').all()) await control.click();
+    for (const control of await page.locator('.agenda-group .date-toggle').all()) await control.click();
+    assert.equal(await page.locator('.agenda-group .transaction:visible').count(), 5);
     await page.locator('.agenda-pending-toggle').click();
     assert.equal(await page.locator('.agenda-groups').isVisible(), false);
     assert.equal(await page.locator('.agenda-pending-toggle span').textContent(), '5');
@@ -80,8 +89,6 @@ async function run(width) {
     await page.locator('[data-group="today:"]').click();
     assert.equal(await page.locator('.agenda-group').nth(1).locator('.transaction').first().isVisible(), false);
     await page.locator('[data-group="today:"]').click();
-    await capture('inicio');
-
     const late = page.locator('.agenda-group').first();
     await late.locator('[data-action="toggleMonth"]').click();
     assert.equal(await late.locator('.month-group-body').isVisible(), false);
@@ -156,6 +163,8 @@ async function run(width) {
     await page.locator('#modal [data-action="close"]').first().click();
     await page.locator(`${nav} [data-page="Inicio"]`).click();
     assert.equal(await page.locator('[data-month="late:2026-11"]').getAttribute('aria-expanded'), 'false');
+    assert.equal(await page.locator('[data-group="today:"]').getAttribute('aria-expanded'), 'true');
+    assert.equal(await page.locator('[data-date="today:2026-11-15"]').getAttribute('aria-expanded'), 'true');
     await page.locator('.transaction[data-id="today"] [data-action="actions"]').click();
     await page.locator('[data-action="edit"][data-id="today"]').click();
     await page.locator('#modal .quick-close').click();
@@ -166,6 +175,13 @@ async function run(width) {
     assert.equal(await page.locator('#modal .recurrence-habitual summary svg').count(), 1);
     await page.locator('#modal .quick-close').click();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    assert.equal(await page.evaluate(key => localStorage.getItem(key), key), original);
+    await page.reload();
+    assert.equal(await page.locator('.agenda-pending-toggle').getAttribute('aria-expanded'), 'true');
+    assert.equal(await page.locator('.agenda-completed-toggle').getAttribute('aria-expanded'), 'false');
+    for (const selector of ['.agenda-group-toggle', '.month-toggle', '.agenda-group .date-toggle']) {
+      for (const control of await page.locator(selector).all()) assert.equal(await control.getAttribute('aria-expanded'), 'false');
+    }
     assert.equal(await page.evaluate(key => localStorage.getItem(key), key), original);
     assert.deepEqual(errors, []);
     await page.close();
@@ -193,6 +209,8 @@ async function runDense(width) {
     await page.locator('#agendaPeriod').selectOption('all');
     assert.deepEqual(await page.locator('[data-group="next:"] + .agenda-group-body .month-toggle span').allTextContents(),
       ['noviembre de 2026', 'diciembre de 2026', 'enero de 2027']);
+    await page.locator('[data-group="next:"]').click();
+    for (const month of await page.locator('[data-group="next:"] + .agenda-group-body .month-toggle').all()) await month.click();
     await page.locator('[data-month="next:2026-12"]').click();
     assert.equal(await page.locator('[data-month="next:2026-12"]').getAttribute('aria-expanded'), 'false');
     assert.equal(await page.locator('[data-month="next:2026-11"]').getAttribute('aria-expanded'), 'true');
