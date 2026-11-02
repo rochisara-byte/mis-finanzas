@@ -59,6 +59,23 @@ async function run(width) {
     assert.equal(await page.locator('.agenda-main-head').evaluate(el => getComputedStyle(el).backgroundColor),
       await page.locator('.agenda-completed-toggle').evaluate(el => getComputedStyle(el).backgroundColor));
     assert.equal(await page.locator('.agenda-history').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(243, 245, 249)');
+    assert.equal(await page.locator('.agenda-pending-toggle').getAttribute('aria-expanded'), 'true');
+    await page.locator('.agenda-pending-toggle').click();
+    assert.equal(await page.locator('.agenda-groups').isVisible(), false);
+    assert.equal(await page.locator('.agenda-pending-toggle span').textContent(), '5');
+    await page.locator('.agenda-pending-toggle').click();
+    assert.equal(await page.locator('.agenda-group').count(), 3);
+    await page.locator('.agenda-completed-toggle').click();
+    assert.equal(await page.locator('.agenda-completed-body .transaction').count(), 3);
+    await page.locator('.agenda-completed-toggle').click();
+    assert.equal(await page.locator('.agenda-completed-body').count(), 0);
+    await page.locator('[data-group="next:"]').click();
+    assert.equal(await page.locator('.agenda-group').last().locator('.transaction').first().isVisible(), false);
+    assert.equal(await page.locator('[data-group="late:"]').getAttribute('aria-expanded'), 'true');
+    await page.locator('[data-group="next:"]').click();
+    await page.locator('[data-group="today:"]').click();
+    assert.equal(await page.locator('.agenda-group').nth(1).locator('.transaction').first().isVisible(), false);
+    await page.locator('[data-group="today:"]').click();
     await capture('inicio');
 
     const late = page.locator('.agenda-group').first();
@@ -102,6 +119,7 @@ async function run(width) {
       await page.locator('.budget-row .progress i').nth(1).evaluate(el => getComputedStyle(el).backgroundColor));
     assert.match(await page.locator('#main').textContent(), /Meta de prueba/);
     assert.match(await page.locator('#main').textContent(), /Deuda de prueba/);
+    assert.equal(await page.locator('.debt-progress').getAttribute('aria-valuenow'), '0');
     await capture('analisis');
     await page.locator('[data-action="showMetricDetail"][data-detail="doneMonth"]').click();
     assert.equal(await page.locator('#metric-detail-display').isVisible(), true);
@@ -138,6 +156,61 @@ async function run(width) {
   } finally { await browser.close(); }
 }
 
-(async () => { for (const width of [375, 1280]) await run(width); })().catch(error => {
+async function runDense(width) {
+  const browser = await chromium.launch({ headless: true,
+    ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}),
+    args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage({ viewport: { width, height: 900 }, serviceWorkers: 'block' });
+    await page.clock.install({ time: new Date('2026-11-15T12:00:00Z') });
+    const dense = structuredClone(fixture);
+    dense.budgets = Array.from({ length: 6 }, (_, i) => ({ id: `budget-${i}`, category: `Prueba ${i}`, amount: 100 }));
+    dense.goals = Array.from({ length: 6 }, (_, i) => ({ id: `goal-${i}`, name: `Meta ficticia ${i}`, target: 100, saved: 0 }));
+    dense.debts = Array.from({ length: 6 }, (_, i) => ({ id: `debt-${i}`, name: `Deuda ficticia ${i}`, balance: i === 5 ? null : 200 }));
+    dense.transactions.push(tx('dec', '2026-12-01', 'pending', 'expense', 10));
+    dense.transactions.push(tx('jan', '2027-01-01', 'pending', 'expense', 10));
+    dense.transactions.push({ ...tx('abono', '2026-11-14', 'done', 'expense', 50), linkKind: 'debt', linkId: 'debt-0' });
+    await page.addInitScript(({ key, dense }) => localStorage.setItem(key, JSON.stringify(dense)), { key, dense });
+    await page.goto(url);
+    await page.locator('#agendaPeriod').selectOption('all');
+    assert.deepEqual(await page.locator('[data-group="next:"] + .agenda-group-body .month-toggle span').allTextContents(),
+      ['noviembre de 2026', 'diciembre de 2026', 'enero de 2027']);
+    await page.locator('[data-month="next:2026-12"]').click();
+    assert.equal(await page.locator('[data-month="next:2026-12"]').getAttribute('aria-expanded'), 'false');
+    assert.equal(await page.locator('[data-month="next:2026-11"]').getAttribute('aria-expanded'), 'true');
+    await page.locator('[data-group="next:"]').click();
+    assert.equal(await page.locator('.agenda-group').last().locator('.transaction:visible').count(), 0);
+    await page.locator('[data-group="next:"]').click();
+    assert.equal(await page.locator('.agenda-group').last().locator('.transaction').count(), 4);
+    const nav = width >= 1024 ? '#desktopNav' : '#nav';
+    await page.locator(`${nav} [data-page="Análisis"]`).click();
+    assert.equal(await page.locator('.analysis-tracking-column').count(), 3);
+    for (const section of await page.locator('.analysis-tracking-column').all()) {
+      assert.equal(await section.locator(':scope > .budget-row:visible,:scope > .item:visible').count(), 3);
+      await section.locator('.analysis-more').click();
+      assert.equal(await section.locator(':scope > .budget-row:visible,:scope > .item:visible').count(), 6);
+      await section.locator('.analysis-more').click();
+      assert.equal(await section.locator(':scope > .budget-row:visible,:scope > .item:visible').count(), 3);
+    }
+    assert.equal(await page.locator('.debt-progress').count(), 5);
+    assert.equal(await page.locator('.debt-progress').first().getAttribute('aria-valuenow'), '25');
+    assert.equal(await page.locator('.analysis-tracking-column').last().locator('[data-action="payDebt"]').count(), 6);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await page.close();
+    const empty = structuredClone(fixture);
+    empty.budgets = [];
+    const blank = await browser.newPage({ viewport: { width, height: 900 }, serviceWorkers: 'block' });
+    await blank.addInitScript(({ key, empty }) => localStorage.setItem(key, JSON.stringify(empty)), { key, empty });
+    await blank.goto(url);
+    await blank.locator(`${nav} [data-page="Análisis"]`).click();
+    const emptyBox = blank.locator('.analysis-tracking-column').first().locator('.empty');
+    assert.equal(await emptyBox.isVisible(), true);
+    assert.ok((await emptyBox.boundingBox()).height < 60);
+    await blank.close();
+    console.log(`ok - revisión densa y estado vacío a ${width}px`);
+  } finally { await browser.close(); }
+}
+
+(async () => { for (const width of [375, 1280]) { await run(width); await runDense(width); } })().catch(error => {
   console.error(error); process.exitCode = 1;
 });
