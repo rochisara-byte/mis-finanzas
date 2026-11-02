@@ -28,9 +28,12 @@ async function run(width) {
     const saved = () => page.evaluate(key => JSON.parse(localStorage.getItem(key)), key);
     assert.equal(await page.locator('.summary-grid .metric').first().textContent().then(s => s.includes('5.070')), true);
     await page.locator('[data-action="showHistory"]').click();
-    assert.deepEqual(await page.locator('.date-toggle').allTextContents().then(a => a.map(s => s.match(/\d{4}-\d{2}-\d{2}/)?.[0])), ['2026-11-02', '2026-11-01', '2026-10-30', '2026-10-29']);
+    assert.deepEqual(await page.locator('.history-month .month-toggle span').allTextContents(), ['Noviembre 2026', 'Octubre 2026']);
+    assert.deepEqual(await page.locator('.history-date .date-toggle').allTextContents().then(a => a.map(s => s.match(/\d{2}\/\d{2}\/\d{4}/)?.[0])), ['02/11/2026', '01/11/2026', '30/10/2026', '29/10/2026']);
+    assert.deepEqual(await page.locator('.history-month .month-toggle').evaluateAll(nodes => nodes.map(n => n.getAttribute('aria-expanded'))), ['true', 'false']);
     assert.deepEqual(await page.locator('.date-toggle').evaluateAll(nodes => nodes.map(n => n.getAttribute('aria-expanded'))), ['true', 'false', 'false', 'false']);
     await capture('historial');
+    await page.locator('[data-month="history-month:2026-10"]').click();
     await page.locator('[data-date="history:2026-10-30"]').click();
     await page.locator('[data-date="history:2026-10-29"]').click();
     assert.equal(await page.locator('.date-toggle[aria-expanded="true"]').count(), 3);
@@ -41,6 +44,7 @@ async function run(width) {
     await page.locator(`${nav} [data-page="Cuentas"]`).click();
     await page.locator(`${nav} [data-page="Inicio"]`).click();
     await page.locator('[data-action="showHistory"]').click();
+    assert.equal(await page.locator('.history-month .month-toggle[aria-expanded="true"]').count(), 1);
     assert.equal(await page.locator('.date-toggle[aria-expanded="true"]').count(), 1);
     await page.locator('[data-action="showAgenda"]').click();
     await page.locator('[data-action="showHistory"]').click();
