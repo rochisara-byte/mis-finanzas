@@ -91,6 +91,8 @@ async function run(width) {
     await page.locator('#agendaPeriod').selectOption('7');
     await page.reload();
     assert.equal(await page.locator('#agendaPeriod').inputValue(), '7');
+    await page.locator('[data-group="today:"]').click();
+    await page.locator('[data-date^="today:"]').click();
     await page.locator('.transaction[data-id="r1"] [data-action="toggle"]').click();
     const records = () => page.evaluate(key => JSON.parse(localStorage.getItem(key)).transactions, key);
     let all = await records();
@@ -101,6 +103,8 @@ async function run(width) {
     assert.equal(await page.locator('.agenda-group').count(), 0);
     assert.equal(await page.locator('.agenda-empty').textContent(), 'No tienes movimientos pendientes para este período');
     await capture('inicio-vacio');
+    assert.equal(await page.locator('[data-action="toggleCompleted"]').getAttribute('aria-expanded'), 'false');
+    await page.locator('[data-action="toggleCompleted"]').click();
     assert.equal(await page.locator('.agenda-completed-body .transaction').count(), 2);
     await page.locator('[data-action="toggleCompleted"]').click();
     assert.equal(await page.locator('.agenda-completed-body').count(), 0);
@@ -108,6 +112,8 @@ async function run(width) {
     all = await records();
     assert.equal(all.find(t => t.id === 'r1').status, 'pending');
     assert.equal(all.length, 3);
+    assert.equal(await page.locator('[data-group="today:"]').getAttribute('aria-expanded'), 'true');
+    assert.equal(await page.locator('[data-date^="today:"]').getAttribute('aria-expanded'), 'true');
     await page.locator('.transaction[data-id="r1"] [data-action="toggle"]').click();
     assert.equal((await records()).length, 3);
     await page.locator('[data-action="showHistory"]').click();
@@ -131,14 +137,17 @@ async function run(width) {
     await page.evaluate(({key,day})=>{const db=JSON.parse(localStorage.getItem(key));db.transactions=Array.from({length:24},(_,i)=>({id:`many-${i}`,type:'expense',title:`Pendiente ficticio ${i}`,amount:10+i,date:i<8?'2020-01-01':i<16?day:'2030-01-01',account:'cash',status:'pending',repeat:'',created:new Date().toISOString()}));localStorage.setItem(key,JSON.stringify(db))},{key,day});
     await page.reload();
     assert.equal(await page.locator('.agenda-main-head h3').textContent().then(s=>s.trim()), 'Pendientes 16');
+    await page.locator('#searchToggle').click();
     await page.locator('#agendaPeriod').selectOption('30');
     assert.equal(await page.locator('.agenda-main-head h3').textContent().then(s=>s.trim()), 'Pendientes 16');
     await page.locator('#agendaPeriod').selectOption('all');
     assert.equal(await page.locator('.agenda-group').count(), 3);
     assert.equal(await page.locator('.agenda-main-head h3').textContent().then(s=>s.trim()), 'Pendientes 24');
     const firstGroup = page.locator('.agenda-group').first();
+    await firstGroup.locator('.agenda-group-toggle').click();
+    await firstGroup.locator('.month-toggle').click();
     await firstGroup.locator('[data-action="toggleDate"]').click();
-    assert.equal(await firstGroup.locator('.date-group-body').isVisible(),false);
+    assert.equal(await firstGroup.locator('.date-group-body').isVisible(),true);
     await capture('inicio-movimientos');
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     assert.deepEqual(errors, []);

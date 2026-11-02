@@ -26,7 +26,7 @@ const fixture = {
 };
 
 function serverForTest() {
-  const state = { version: shellVersion, failAsset: false };
+  const state = { version: shellVersion - 1, failAsset: false, oldShell: true, updateAttempt: 0 };
   const server = http.createServer((request, response) => {
     const pathname = new URL(request.url, 'http://localhost').pathname;
     const name = pathname.startsWith('/mis-finanzas/') ? pathname.slice('/mis-finanzas/'.length) : null;
@@ -36,9 +36,12 @@ function serverForTest() {
       response.writeHead(503); response.end('Fallo ficticio de descarga'); return;
     }
     let body = fs.readFileSync(path.join(root, entry[0]));
+    if (state.oldShell && (name === '' || name === 'index.html')) {
+      body = Buffer.from(body.toString().replace('<body>', '<body data-shell-probe="previous">'));
+    }
     if (name === 'sw.js') {
       body = Buffer.from(body.toString().replace(/const CACHE_VERSION = \d+;/,
-        `const CACHE_VERSION = ${state.version};`));
+        `const CACHE_VERSION = ${state.version};`) + `\n// Intento de actualización ${state.updateAttempt}`);
     }
     response.writeHead(200, { 'Content-Type': entry[1], 'Cache-Control': 'no-store' });
     response.end(body);
@@ -92,6 +95,7 @@ async function main() {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(address);
+    assert.equal(await page.locator('body').getAttribute('data-shell-probe'), 'previous');
 
     const manifestUrl = new URL('manifest.webmanifest', address);
     const manifestResponse = await page.request.get(manifestUrl.href);
@@ -122,6 +126,7 @@ async function main() {
     await page.reload();
     await page.waitForFunction(() => !!navigator.serviceWorker.controller);
     assert.equal(await page.evaluate(() => navigator.serviceWorker.controller.scriptURL.endsWith('/mis-finanzas/sw.js')), true);
+    assert.equal(await page.locator('body').getAttribute('data-shell-probe'), 'previous');
     const installability = await cdp.send('Page.getInstallabilityErrors');
     assert.deepEqual(installability.installabilityErrors, []);
     const cacheUrls = await page.evaluate(async () => {
@@ -138,10 +143,10 @@ async function main() {
     }));
     const mockedDrive = await page.evaluate(() => fetch('https://www.googleapis.com/drive/v3/files?test=ficticio').then(response => response.json()));
     assert.equal(mockedDrive.files.length, 0);
-    const afterDrive = await page.evaluate(async shellVersion => {
-      const cache = await caches.open(`mis-finanzas-shell-v${shellVersion}`);
+    const afterDrive = await page.evaluate(async oldVersion => {
+      const cache = await caches.open(`mis-finanzas-shell-v${oldVersion}`);
       return (await cache.keys()).map(request => request.url);
-    }, shellVersion);
+    }, shellVersion - 1);
     assert.deepEqual(afterDrive, cacheUrls);
     assert.deepEqual(errors, []);
     console.log('ok - worker activo y caché limitado al shell propio');
@@ -149,6 +154,7 @@ async function main() {
     await context.setOffline(true);
     const offlineResponse = await page.reload();
     assert.equal(offlineResponse.fromServiceWorker(), true);
+    assert.equal(await page.locator('body').getAttribute('data-shell-probe'), 'previous');
     for (const section of ['Inicio', 'Listas', 'Cuentas', 'Análisis']) {
       await page.locator(`#nav [data-page="${section}"]`).click();
       assert.equal(await page.locator(`#nav [data-page="${section}"]`).getAttribute('class').then(value => value.includes('active')), true);
@@ -174,18 +180,21 @@ async function main() {
     console.log('ok - apertura, navegación y guardado sin conexión tras cerrar y reabrir');
 
     await context.setOffline(false);
-    state.version = shellVersion + 1;
+    state.version = shellVersion;
+    state.updateAttempt = 1;
+    state.oldShell = false;
     state.failAsset = true;
     assert.equal(await observeUpdate(page), 'redundant');
     assert.equal(await page.evaluate(async () => (await navigator.serviceWorker.getRegistration()).waiting), null);
     await context.setOffline(true);
     const interrupted = await page.reload();
     assert.equal(interrupted.fromServiceWorker(), true);
+    assert.equal(await page.locator('body').getAttribute('data-shell-probe'), 'previous');
     assert.deepEqual(await stored(page), saved);
     console.log('ok - instalación interrumpida conserva la versión anterior y los datos');
 
     await context.setOffline(false);
-    state.version = shellVersion + 2;
+    state.updateAttempt = 2;
     state.failAsset = false;
     assert.equal(await observeUpdate(page), 'installed');
     assert.equal(await page.evaluate(async () => !!(await navigator.serviceWorker.getRegistration()).waiting), true);
@@ -194,12 +203,16 @@ async function main() {
     page = await context.newPage();
     await page.goto(address);
     await page.waitForFunction(async () => (await navigator.serviceWorker.ready).active.state === 'activated');
+    await page.reload();
+    await page.waitForFunction(async oldName => !(await caches.keys()).includes(oldName),
+      `mis-finanzas-shell-v${shellVersion - 1}`);
     const cacheNames = await page.evaluate(() => caches.keys());
-    assert.ok(cacheNames.includes(`mis-finanzas-shell-v${shellVersion + 2}`));
-    assert.ok(!cacheNames.includes(`mis-finanzas-shell-v${shellVersion}`));
+    assert.ok(cacheNames.includes(`mis-finanzas-shell-v${shellVersion}`));
+    assert.equal(await page.locator('body').getAttribute('data-shell-probe'), null);
     assert.deepEqual(await stored(page), saved);
     await context.setOffline(true);
     assert.equal((await page.reload()).fromServiceWorker(), true);
+    assert.equal(await page.locator('body').getAttribute('data-shell-probe'), null);
     assert.deepEqual(await stored(page), saved);
     console.log('ok - actualización completa mantiene registros y funciona sin conexión');
 
