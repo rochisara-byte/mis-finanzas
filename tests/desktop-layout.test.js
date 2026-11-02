@@ -152,7 +152,7 @@ async function main() {
     await page.locator('#settings').click();
     assert.equal(await page.locator('#modal[data-inline-quick=false] #form').count(), 1);
     await page.locator('#modal [data-action="close"]').first().click();
-    assert.equal(await page.locator('#quickEntry').inputValue(), 'Borrador ficticio 12000');
+    assert.equal(await page.locator('#quickEntry').inputValue(), 'Borrador ficticio 12.000');
     const before = (await records(page)).length;
     await page.locator('#quickEntry').fill('Compra ficticia 12000');
     await page.locator('#modal .quick-save').evaluate(button => { button.click(); button.click(); });
@@ -177,6 +177,7 @@ async function main() {
     assert.equal((await records(page)).filter(t => t.title === 'Traslado ficticio' && t.type === 'transfer' && t.toAccount === 'banco').length, 1);
     await page.locator('#desktopNav [data-page="Inicio"]').click();
     await page.locator('[data-action="showHistory"]').click();
+    await page.locator('[data-date="history:2026-10-19"]').click();
     await page.locator('.transaction[data-id="gasto-1"] [data-action="actions"]').click();
     await page.locator('[data-action="edit"][data-id="gasto-1"]').click();
     assert.equal(await page.locator('#modal[data-inline-quick=false] .quick-head').count(), 1);
