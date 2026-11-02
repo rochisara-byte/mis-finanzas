@@ -118,6 +118,8 @@ async function run(width) {
     assert.equal((await records()).length, 3);
     await page.locator('[data-action="showHistory"]').click();
     assert.equal(await page.locator('.transaction[data-id="past"]').count(), 1);
+    if (await page.locator(`[data-month="history-month:${day.slice(0, 7)}"]`).getAttribute('aria-expanded') === 'false')
+      await page.locator(`[data-month="history-month:${day.slice(0, 7)}"]`).click();
     if (await page.locator(`.date-toggle[data-date="history:${day}"]`).getAttribute('aria-expanded') === 'false')
       await page.locator(`.date-toggle[data-date="history:${day}"]`).click();
     await page.locator('.transaction[data-id="r1"] [data-action="actions"]').click();
