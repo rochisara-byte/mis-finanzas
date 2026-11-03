@@ -87,8 +87,8 @@ async function main() {
           const geometry = await page.evaluate(section => {
             const main = document.querySelector('#main');
             const lists = [...main.querySelectorAll(':scope > .flat-list')];
-            const first = section === 'Listas' ? lists[0] : main.querySelector('.total-account');
-            const second = section === 'Listas' ? lists[1] : lists[0];
+            const first = section === 'Listas' ? main.querySelector('.lists-main') : main.querySelector('.total-account');
+            const second = section === 'Listas' ? main.querySelector('.lists-smart') : lists[0];
             const panel = document.querySelector('#modal').getBoundingClientRect();
             const rect = element => {
               const box = element.getBoundingClientRect();
@@ -100,13 +100,13 @@ async function main() {
               return box.left < parent.left - 1 || box.right > parent.right + 1 || item.scrollWidth > item.clientWidth + 1;
             });
             return { first: rect(first), second: rect(second), panelLeft: panel.left,
-              clipped, firstPadding: parseFloat(getComputedStyle(lists[0]).paddingBottom),
+              clipped, firstPadding: parseFloat(getComputedStyle(section === 'Listas' ? first.querySelector('.flat-list') : lists[0]).paddingBottom),
               newAccount: section === 'Cuentas' ? rect(main.querySelector('.new-account')) : null };
           }, section);
           assert.equal(geometry.clipped, false, `${section}: tarjeta cortada a ${width}px`);
           assert.ok(geometry.second.right <= geometry.panelLeft, `${section}: invade el panel a ${width}px`);
           assert.equal(geometry.firstPadding, 0, `${section}: espacio móvil residual a ${width}px`);
-          if (width >= 1280) {
+          if (section === 'Listas' || width >= 1280) {
             assert.ok(geometry.first.right < geometry.second.left, `${section}: columnas superpuestas a ${width}px`);
           } else {
             assert.ok(geometry.first.bottom <= geometry.second.top, `${section}: bloques superpuestos a ${width}px`);
