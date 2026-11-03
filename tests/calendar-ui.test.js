@@ -28,7 +28,7 @@ async function main() {
     ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}), args: ['--no-sandbox'] });
   try {
     const base = `http://127.0.0.1:${server.address().port}/`;
-    for (const width of [390, 1280]) {
+    for (const width of [375, 1280]) {
       const page = await browser.newPage({ viewport: { width, height: 850 }, serviceWorkers: 'block' });
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
@@ -51,6 +51,11 @@ async function main() {
       await page.locator('#calendarSettings[open]').waitFor();
       assert.equal(await page.locator('#calendarDrive').isVisible(), true);
       assert.match(await page.locator('#calendarStatus').innerText(), /no está en este dispositivo/);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      if (process.env.CAPTURE_DIR) {
+        fs.mkdirSync(process.env.CAPTURE_DIR, { recursive: true });
+        await page.screenshot({ path: path.join(process.env.CAPTURE_DIR, `calendar-enlace-${width}.png`) });
+      }
       assert.deepEqual(errors, []);
       await page.close();
       console.log(`ok - enlaces de Calendar y acción de Drive a ${width}px`);

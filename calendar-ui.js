@@ -6,7 +6,7 @@ const CLIENT='977076702377-qfvfg50kiajoc50s65kuf88m3i7gqkd6.apps.googleuserconte
 const read=()=>{const raw=localStorage.getItem(DB);if(raw===null)return [];const value=JSON.parse(raw);if(!Array.isArray(value?.transactions))throw Error('Los movimientos locales no están disponibles');return value.transactions};
 const prefs=()=>{try{return JSON.parse(localStorage.getItem(PREF))||{}}catch{return {}}};
 const save=value=>localStorage.setItem(PREF,JSON.stringify(value));
-const engine=window.MisFinanzasCalendar?.create({clientId:CLIENT,readTransactions:read,loadState:prefs,saveState:save,onStatus:message=>status(message)});
+const engine=window.MisFinanzasCalendar?.create({clientId:CLIENT,readTransactions:read,loadState:prefs,saveState:save,onStatus:message=>status(message),allowConditionalMutations:true});
 if(!engine)return;
 const button=document.createElement('button');button.type='button';button.id='calendarConnectButton';button.className='iconbtn';
 button.textContent='▦';button.title='Google Calendar';button.setAttribute('aria-label','Google Calendar');

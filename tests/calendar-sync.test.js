@@ -10,7 +10,7 @@ const expense = (id, extra = {}) => ({ id, type: 'expense', title: `Pago ${id}`,
 
 function api() {
   const calendars = new Map(), events = new Map();
-  let nextCalendar = 1, failPost = false, offline = false, calls = [];
+  let nextCalendar = 1, failPost = false, offline = false, calls = [], concurrentWrite = null;
   const reply = (status, body) => ({ ok: status >= 200 && status < 300, status,
     async json() { return clone(body); } });
   const fetch = async (input, options = {}) => {
@@ -48,6 +48,11 @@ function api() {
     const id = decodeURIComponent(segments[5] || ''), old = records.get(id);
     if (!old) return reply(404, {});
     if (method === 'GET') return reply(200, old);
+    if (concurrentWrite && (method === 'PATCH' || method === 'DELETE')) {
+      records.set(id, { ...old, ...concurrentWrite, etag: '"99"' });
+      concurrentWrite = null;
+      return reply(412, {});
+    }
     if (options.headers['If-Match'] !== old.etag) return reply(412, {});
     if (method === 'DELETE') { records.delete(id); return reply(204, null); }
     if (method === 'PATCH') {
@@ -58,7 +63,8 @@ function api() {
     return reply(404, {});
   };
   return { fetch, calendars, events, calls,
-    setOffline(value) { offline = value; }, loseNextPost() { failPost = true; } };
+    setOffline(value) { offline = value; }, loseNextPost() { failPost = true; },
+    changeOnNextWrite(value) { concurrentWrite = value; } };
 }
 
 function device(shared, initial = [], allowConditionalMutations = true, initialState = {}) {
@@ -142,11 +148,39 @@ async function main() {
   assert.equal(shared.calls.filter(x => x.method === 'PATCH').length, writesBefore);
   restarted.engine.setReminders([20160, 0], restarted.transactions);
   assert.equal((await restarted.engine.reconcile()).updated, 1);
+  const downloadedPayment = device(shared, [expense('offline', { status: 'done' })]);
+  await downloadedPayment.engine.authorize();
+  assert.equal((await downloadedPayment.engine.reconcile()).conflicts, 1);
+  assert.ok(records.has(downloadedPayment.win.MisFinanzasCalendar.eventId('offline')));
   assert.throws(() => restarted.engine.setReminders([40321], restarted.transactions), /hasta cinco/);
   await restarted.engine.authorize();
   assert.equal(restarted.requests, 2);
   assert.ok(shared.calls.some(call => call.method === 'PATCH' && call.headers['If-Match']));
   console.log('ok - offline, respuesta perdida, paginación, recordatorios y escritura condicional');
+
+  const editing = device(shared, [expense('offline')], true, { reminders: [20160, 0] });
+  await editing.engine.authorize();
+  editing.transactions = [expense('offline', { title: 'Edición ficticia' })];
+  editing.engine.noteChange('offline', expense('offline'), editing.transactions[0]);
+  shared.changeOnNextWrite({ summary: 'Edición desde otro dispositivo' });
+  result = await editing.engine.reconcile();
+  assert.equal(result.conflicts, 1);assert.equal(result.updated, 0);
+  assert.equal(records.get(editing.win.MisFinanzasCalendar.eventId('offline')).summary, 'Edición desde otro dispositivo');
+  assert.ok(editing.saved.ops.offline);
+  assert.equal((await editing.engine.reconcile()).conflicts, 1);
+
+  const deleting = device(shared, [expense('delete-race')]);
+  deleting.engine.noteCreate('delete-race');
+  await deleting.engine.authorize();
+  assert.equal((await deleting.engine.reconcile()).created, 1);
+  deleting.transactions = [expense('delete-race', { status: 'done' })];
+  deleting.engine.noteChange('delete-race', expense('delete-race'), deleting.transactions[0]);
+  shared.changeOnNextWrite({ summary: 'Pago modificado en otro dispositivo' });
+  result = await deleting.engine.reconcile();
+  assert.equal(result.conflicts, 1);assert.equal(result.removed, 0);
+  assert.equal(records.get(deleting.win.MisFinanzasCalendar.eventId('delete-race')).summary, 'Pago modificado en otro dispositivo');
+  assert.ok(deleting.saved.ops['delete-race']);
+  console.log('ok - HTTP 412 conserva edición, eliminación e intención local para revisión');
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

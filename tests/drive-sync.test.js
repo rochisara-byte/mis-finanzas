@@ -43,7 +43,8 @@ function data(overrides = {}) {
     accounts: [{ id: 'caja', name: 'Caja ficticia', type: 'cash', opening: 50 }],
     transactions: [{ id: 'mov-1', type: 'expense', title: 'Ejemplo', amount: 5,
       date: '2026-01-10', account: 'caja', status: 'pending', repeat: 'monthly', created: '2026-01-01T00:00:00.000Z',
-      recurrenceRootId: 'mov-1', generatedNextId: 'mov-2' }],
+      recurrenceRootId: 'mov-1', generatedNextId: 'mov-2', recurrenceAmount: 10,
+      amountAdjusted: true, completedAt: '2026-01-10T12:00:00.000Z' }],
     lists: [{ id: 'lista', name: 'Ejemplo' }], categories: ['Ejemplo'],
     budgets: [{ category: 'Ejemplo', amount: 10 }],
     debts: [{ id: 'deuda', name: 'Ejemplo', balance: 20 }],
@@ -158,6 +159,29 @@ async function test(name, run) {
 }
 
 async function main() {
+  await test('deseos y vínculos explícitos sobreviven a Drive sin alterar datos locales antiguos', async () => {
+    const wish = { id: 'deseo-ficticio', name: 'Compra ficticia', estimate: 80, kind: 'product', category: 'Ejemplo' };
+    const remote = data({ wishes: [wish], transactions: [{ ...data().transactions[0], wishId: wish.id, repeat: '' }] });
+    const local = data({ transactions: [] });
+    const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(remote) }]);
+    const instance = app(local, service, [true, true]);
+    await resolve(instance, 'remote');
+    const saved = JSON.parse(instance.storage.getItem(KEY));
+    assert.deepEqual(saved.wishes, [wish]);
+    assert.equal(saved.transactions[0].wishId, wish.id);
+    assert.equal(instance.api.normalizeRemote(data({ transactions: [] })).wishes, undefined);
+  });
+  await test('Drive rechaza compras duplicadas y conserva la copia local', async () => {
+    const wish = { id: 'deseo-ficticio', name: 'Compra ficticia', estimate: 80 };
+    const movement = { ...data().transactions[0], wishId: wish.id, repeat: '' };
+    const broken = data({ wishes: [wish], transactions: [movement, { ...movement, id: 'otro-movimiento' }] });
+    const local = data({ wishes: [wish], transactions: [] });
+    const service = drive([{ id: 'uno', modifiedTime: '2026-01-02T00:00:00Z', body: JSON.stringify(broken) }]);
+    const instance = app(local, service);
+    await instance.api.sync(true);
+    assert.deepEqual(JSON.parse(instance.storage.getItem(KEY)), local);
+    assert.ok(service.copies[0].body.includes('otro-movimiento'));
+  });
   await test('descarga válida y conservación de cuentas, movimientos, deudas, metas y recurrencias', async () => {
     const local = data();
     const remote = data({ accounts: [...local.accounts, { id: 'banco', name: 'Banco ficticio', type: 'bank', opening: 100 }],

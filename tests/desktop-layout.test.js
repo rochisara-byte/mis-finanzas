@@ -87,8 +87,8 @@ async function main() {
           const geometry = await page.evaluate(section => {
             const main = document.querySelector('#main');
             const lists = [...main.querySelectorAll(':scope > .flat-list')];
-            const first = section === 'Listas' ? lists[0] : main.querySelector('.total-account');
-            const second = section === 'Listas' ? lists[1] : lists[0];
+            const first = section === 'Listas' ? main.querySelector('.lists-main') : main.querySelector('.total-account');
+            const second = section === 'Listas' ? main.querySelector('.lists-smart') : lists[0];
             const panel = document.querySelector('#modal').getBoundingClientRect();
             const rect = element => {
               const box = element.getBoundingClientRect();
@@ -100,13 +100,13 @@ async function main() {
               return box.left < parent.left - 1 || box.right > parent.right + 1 || item.scrollWidth > item.clientWidth + 1;
             });
             return { first: rect(first), second: rect(second), panelLeft: panel.left,
-              clipped, firstPadding: parseFloat(getComputedStyle(lists[0]).paddingBottom),
+              clipped, firstPadding: parseFloat(getComputedStyle(section === 'Listas' ? first.querySelector('.flat-list') : lists[0]).paddingBottom),
               newAccount: section === 'Cuentas' ? rect(main.querySelector('.new-account')) : null };
           }, section);
           assert.equal(geometry.clipped, false, `${section}: tarjeta cortada a ${width}px`);
           assert.ok(geometry.second.right <= geometry.panelLeft, `${section}: invade el panel a ${width}px`);
           assert.equal(geometry.firstPadding, 0, `${section}: espacio móvil residual a ${width}px`);
-          if (width >= 1280) {
+          if (section === 'Listas' || width >= 1280) {
             assert.ok(geometry.first.right < geometry.second.left, `${section}: columnas superpuestas a ${width}px`);
           } else {
             assert.ok(geometry.first.bottom <= geometry.second.top, `${section}: bloques superpuestos a ${width}px`);
@@ -152,7 +152,7 @@ async function main() {
     await page.locator('#settings').click();
     assert.equal(await page.locator('#modal[data-inline-quick=false] #form').count(), 1);
     await page.locator('#modal [data-action="close"]').first().click();
-    assert.equal(await page.locator('#quickEntry').inputValue(), 'Borrador ficticio 12000');
+    assert.equal(await page.locator('#quickEntry').inputValue(), 'Borrador ficticio 12.000');
     const before = (await records(page)).length;
     await page.locator('#quickEntry').fill('Compra ficticia 12000');
     await page.locator('#modal .quick-save').evaluate(button => { button.click(); button.click(); });
@@ -170,12 +170,15 @@ async function main() {
     assert.equal((await records(page)).filter(t => t.title === 'Ingreso ficticio' && t.type === 'income').length, 1);
     await page.locator('#modal [name="type"]').selectOption('transfer');
     await page.locator('#quickEntry').fill('Traslado ficticio 1000');
-    await page.locator('#modal .quick-details summary').click();
+    await page.locator('#modal .quick-details > summary').click();
     await page.locator('#modal [name="toAccount"]').selectOption('banco');
     await page.locator('#modal .quick-save').click();
     await page.waitForFunction(key => JSON.parse(localStorage.getItem(key)).transactions.some(t => t.title === 'Traslado ficticio'), key);
     assert.equal((await records(page)).filter(t => t.title === 'Traslado ficticio' && t.type === 'transfer' && t.toAccount === 'banco').length, 1);
     await page.locator('#desktopNav [data-page="Inicio"]').click();
+    await page.locator('[data-action="showHistory"]').click();
+    await page.locator('[data-month="history-month:2026-10"]').click();
+    await page.locator('[data-date="history:2026-10-19"]').click();
     await page.locator('.transaction[data-id="gasto-1"] [data-action="actions"]').click();
     await page.locator('[data-action="edit"][data-id="gasto-1"]').click();
     assert.equal(await page.locator('#modal[data-inline-quick=false] .quick-head').count(), 1);

@@ -105,13 +105,15 @@ function create({clientId,readTransactions,loadState=()=>({}),saveState=()=>{},o
     if(old&&desired&&same(old,desired)){if(op||state.createIds[id]){delete state.ops[id];delete state.createIds[id];persist();}continue;}
     if(old){
      const matchesIntent=op&&JSON.stringify(op.desired)===JSON.stringify(desired?normalize(t):null);
-     if(!matchesIntent||!op.base||!old.etag||!same(old,event(op.base,op.reminders))){if(op||desired)conflicts++;continue;}
+     if(!matchesIntent||!op.base||!old.etag||!same(old,event(op.base,op.reminders))){conflicts++;continue;}
      if(!allowConditionalMutations){conflicts++;continue;}
-     if(desired){await request(path(calendarId)+'/events/'+encodeURIComponent(old.id),'PATCH',
+     if(desired){try{await request(path(calendarId)+'/events/'+encodeURIComponent(old.id),'PATCH',
       {summary:desired.summary,description:desired.description,start:desired.start,end:desired.end,reminders:desired.reminders},old.etag);
+      }catch(e){if(e.status===412){conflicts++;continue}throw e}
       const checked=await request(path(calendarId)+'/events/'+encodeURIComponent(old.id));
       if(!same(checked,desired))throw Error('No se verificó la actualización del evento');updated++;
-     }else{await request(path(calendarId)+'/events/'+encodeURIComponent(old.id),'DELETE',undefined,old.etag);
+     }else{try{await request(path(calendarId)+'/events/'+encodeURIComponent(old.id),'DELETE',undefined,old.etag);
+      }catch(e){if(e.status===412){conflicts++;continue}throw e}
       try{await request(path(calendarId)+'/events/'+encodeURIComponent(old.id));throw Error('No se verificó la eliminación del evento');}
       catch(e){if(e.status!==404)throw e;}removed++;
      }
