@@ -177,6 +177,7 @@ async function main() {
     assert.equal((await records(page)).filter(t => t.title === 'Traslado ficticio' && t.type === 'transfer' && t.toAccount === 'banco').length, 1);
     await page.locator('#desktopNav [data-page="Inicio"]').click();
     await page.locator('[data-action="showHistory"]').click();
+    await page.locator('[data-month="history-month:2026-10"]').click();
     await page.locator('[data-date="history:2026-10-19"]').click();
     await page.locator('.transaction[data-id="gasto-1"] [data-action="actions"]').click();
     await page.locator('[data-action="edit"][data-id="gasto-1"]').click();

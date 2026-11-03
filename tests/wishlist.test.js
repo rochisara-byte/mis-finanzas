@@ -179,8 +179,10 @@ async function run(width) {
       const chooser = await chooserPromise;
       await chooser.setFiles({ name: 'respaldo-ficticio.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(copy)) });
     };
+    const revisionBeforeImport = (await stored()).revision;
     page.once('dialog', dialog => dialog.accept());
     await importBackup(backup);
+    await page.waitForFunction(({ key, revision }) => JSON.parse(localStorage.getItem(key)).revision > revision, { key, revision: revisionBeforeImport });
     assert.equal((await stored()).transactions.length, 2);
     const beforeInvalid = JSON.stringify(await stored());
     const invalid = structuredClone(backup);
