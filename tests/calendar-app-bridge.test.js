@@ -13,8 +13,10 @@ const fixture = { version: 1, device: 'calendar-puente-ficticio', revision: 1, u
 async function main() {
   const browser = await chromium.launch({ headless: true, ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}), args: ['--no-sandbox'] });
   try {
-    const page = await browser.newPage({ viewport: { width: 375, height: 850 }, serviceWorkers: 'block' });
+    const context = await browser.newContext({ viewport: { width: 375, height: 850 }, serviceWorkers: 'block' });
+    const page = await context.newPage();
     const errors = []; page.on('pageerror', error => errors.push(error.message));
+    page.on('dialog', dialog => dialog.accept());
     await page.route('https://accounts.google.com/**', route => route.abort());
     await page.addInitScript(({ key, fixture }) => {
       localStorage.setItem(key, JSON.stringify(fixture));
@@ -52,9 +54,12 @@ async function main() {
       };
     }, { key, fixture });
     await page.goto(address);
+    const secondTab = await context.newPage();
+    await secondTab.goto(address);
     await page.locator('#calendarConnectButton').click();
     await page.locator('#calendarEnable').click();
     await page.waitForFunction(() => window.__calendarFake.events.size === 1);
+    assert.equal(await page.evaluate(() => window.__calendarFake.calls.some(call => call.path.endsWith('/users/me/calendarList'))), false);
     assert.equal(await page.evaluate(() => total()), 5000);
     await page.locator('#calendarClose').click();
 
@@ -114,6 +119,23 @@ async function main() {
     assert.equal(result.db.budgets[0].amount, 3000);
     assert.equal(result.db.lists[0].id, 'lista');
     assert.ok(result.calls.filter(call => ['PATCH', 'DELETE'].includes(call.method)).every(call => call.ifMatch));
+    const eventBeforeRestore = later.events[0].id;
+    await page.context().setOffline(true);
+    await page.evaluate(id => { const item = db.transactions.find(t => t.id === id);item.amount += 50;persist(); }, grandchild.id);
+    await page.evaluate(id => { const item = db.transactions.find(t => t.id === id);item.status = 'done';window.dispatchEvent(new CustomEvent('finanzas-data-replaced', { detail: { transactions: db.transactions } }));persist(); }, grandchild.id);
+    await page.context().setOffline(false);
+    await page.waitForTimeout(1500);
+    assert.equal(await page.evaluate(id => window.__calendarFake.events.has(id), eventBeforeRestore), true);
+    assert.equal(await page.evaluate(id => JSON.parse(localStorage.getItem('mis-finanzas-calendar-v1')).reviewIds[id], grandchild.id), true);
+    console.log('ok - reemplazo de copia no borra recordatorio anterior');
+
+    await secondTab.evaluate(() => { db.transactions.push({ id: 'segunda-pestana', type: 'expense', title: 'Desde otra pestaña', amount: 10, category: 'Otros', date: '2026-11-25', account: 'caja', status: 'pending' });persist(); });
+    const prefs = await secondTab.evaluate(() => JSON.parse(localStorage.getItem('mis-finanzas-calendar-v1')));
+    assert.equal(prefs.calendarId, 'cal-ficticio');
+    assert.equal(prefs.enabled, true);
+    assert.equal(prefs.createIds['segunda-pestana'], true);
+    console.log('ok - segunda pestaña conserva ID y conexión al guardar una operación');
+    await secondTab.close();
     assert.deepEqual(errors, []);
     console.log('ok - formulario, offline, pago, reversión y recurrencias llegan a Calendar sin alterar vínculos');
   } finally { await browser.close(); }
