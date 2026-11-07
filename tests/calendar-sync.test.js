@@ -10,14 +10,15 @@ const expense = (id, extra = {}) => ({ id, type: 'expense', title: `Pago ${id}`,
 
 function api() {
   const calendars = new Map(), events = new Map();
-  let nextCalendar = 1, failPost = false, offline = false, calls = [], concurrentWrite = null, cancelledOnDelete = false, onPatch = null;
+  let nextCalendar = 1, failPost = false, offline = false, calls = [], concurrentWrite = null, cancelledOnDelete = false, onPatch = null, hideList = false;
   const reply = (status, body) => ({ ok: status >= 200 && status < 300, status,
     async json() { return clone(body); } });
   const fetch = async (input, options = {}) => {
     if (offline) throw Error('Sin internet');
     const url = new URL(input), segments = url.pathname.split('/').filter(Boolean);
     const method = options.method || 'GET';
-    calls.push({ method, path: url.pathname, headers: options.headers });
+    calls.push({ method, path: url.pathname, headers: options.headers,
+      body: options.body ? JSON.parse(options.body) : undefined });
     if (url.pathname.endsWith('/users/me/calendarList')) {
       const all = [...calendars.values()];
       const offset = Number(url.searchParams.get('pageToken') || 0);
@@ -34,14 +35,16 @@ function api() {
     if (segments[4] !== 'events' || !events.has(calendarId)) return reply(404, {});
     const records = events.get(calendarId);
     if (segments.length === 5 && method === 'GET') {
-      const all = [...records.values()], offset = Number(url.searchParams.get('pageToken') || 0);
+      const all = hideList ? [] : [...records.values()].filter(item => item.status !== 'cancelled');
+      hideList = false;
+      const offset = Number(url.searchParams.get('pageToken') || 0);
       return reply(200, { items: all.slice(offset, offset + 1).map(clone),
         ...(offset + 1 < all.length ? { nextPageToken: String(offset + 1) } : {}) });
     }
     if (segments.length === 5 && method === 'POST') {
       const item = JSON.parse(options.body);
       if (records.has(item.id)) return reply(409, {});
-      records.set(item.id, { ...item, etag: '"1"' });
+      records.set(item.id, { ...item, status: item.status || 'confirmed', etag: '"1"' });
       if (failPost) { failPost = false; throw Error('Respuesta perdida'); }
       return reply(200, records.get(item.id));
     }
@@ -54,7 +57,13 @@ function api() {
       return reply(412, {});
     }
     if (options.headers['If-Match'] !== old.etag) return reply(412, {});
-    if (method === 'DELETE') { if (cancelledOnDelete) records.set(id, { ...old, status: 'cancelled' }); else records.delete(id); return reply(204, null); }
+    if (method === 'DELETE') {
+      if (cancelledOnDelete) {
+        const version = Number(old.etag.replace(/\D/g, '')) + 1;
+        records.set(id, { ...old, status: 'cancelled', etag: `"${version}"` });
+      } else records.delete(id);
+      return reply(204, null);
+    }
     if (method === 'PATCH') {
       const version = Number(old.etag.replace(/\D/g, '')) + 1;
       const item = { ...old, ...JSON.parse(options.body), etag: `"${version}"` };
@@ -65,7 +74,8 @@ function api() {
   return { fetch, calendars, events, calls,
     setOffline(value) { offline = value; }, loseNextPost() { failPost = true; },
     changeOnNextWrite(value) { concurrentWrite = value; },
-    cancelledDeletes(value) { cancelledOnDelete = value; }, onNextPatch(hook) { onPatch = hook; } };
+    cancelledDeletes(value) { cancelledOnDelete = value; }, hideNextList() { hideList = true; },
+    onNextPatch(hook) { onPatch = hook; } };
 }
 
 function device(shared, initial = [], allowConditionalMutations = true, initialState = {}, oauth = {}) {
@@ -82,6 +92,17 @@ function device(shared, initial = [], allowConditionalMutations = true, initialS
     saveState: value => { saved = clone(value); }, allowConditionalMutations });
   return { engine, win, get transactions() { return transactions; }, set transactions(value) { transactions = clone(value); },
     get saved() { return clone(saved); }, get requests() { return requests; } };
+}
+
+async function cancelledScenario(id) {
+  const shared = api(), current = device(shared, [expense(id)]);
+  await current.engine.authorize();assert.equal((await current.engine.reconcile()).created, 1);
+  const calendarId = current.engine.calendarId, records = shared.events.get(calendarId), eventId = current.win.MisFinanzasCalendar.eventId(id);
+  const before = clone(current.transactions[0]);
+  current.transactions = [{ ...before, status: 'done' }];current.engine.noteChange(id, before, current.transactions[0]);
+  shared.cancelledDeletes(true);assert.equal((await current.engine.reconcile()).removed, 1);
+  assert.equal(records.get(eventId).status, 'cancelled');
+  return { shared, current, calendarId, records, eventId };
 }
 
 async function main() {
@@ -207,6 +228,95 @@ async function main() {
   assert.equal((await pending.engine.reconcile()).removed, 1);
   assert.equal(pending.saved.ops['sin-red'], undefined);
   console.log('ok - DELETE verificado con estado cancelled');
+
+  const revivedScenario = await cancelledScenario('revivir');
+  const paidForReversal = clone(revivedScenario.current.transactions[0]);
+  revivedScenario.current.transactions = [{ ...paidForReversal, status: 'pending' }];
+  revivedScenario.current.engine.noteChange('revivir', paidForReversal, revivedScenario.current.transactions[0]);
+  result = await revivedScenario.current.engine.reconcile();
+  const revivedEvent = revivedScenario.records.get(revivedScenario.eventId);
+  assert.equal(result.created, 1);assert.equal(result.conflicts, 0);assert.equal(revivedEvent.status, 'confirmed');
+  assert.equal(revivedEvent.extendedProperties.private.source, 'mis-finanzas-v27');
+  assert.equal(revivedEvent.extendedProperties.private.movementId, 'revivir');
+  assert.equal(revivedEvent.summary, revivedScenario.current.win.MisFinanzasCalendar.event(revivedScenario.current.transactions[0]).summary);
+  console.log('ok - reversión restaura una lápida cancelled y verifica estado, contenido y marcador');
+
+  const restorePatch = revivedScenario.shared.calls.find(call => call.method === 'PATCH' && call.body?.status === 'confirmed');
+  assert.ok(restorePatch);assert.equal(restorePatch.headers['If-Match'], '"2"');
+  assert.equal(restorePatch.body.extendedProperties.private.movementId, 'revivir');
+  console.log('ok - restauración usa PATCH condicional con el ETag vigente');
+
+  const verificationScenario = await cancelledScenario('verificacion');
+  verificationScenario.shared.onNextPatch(() => {
+    const item = verificationScenario.records.get(verificationScenario.eventId);
+    verificationScenario.records.set(verificationScenario.eventId, { ...item, status: 'cancelled', etag: '"4"' });
+  });
+  const paidBeforeVerification = clone(verificationScenario.current.transactions[0]);
+  verificationScenario.current.transactions = [{ ...paidBeforeVerification, status: 'pending' }];
+  verificationScenario.current.engine.noteChange('verificacion', paidBeforeVerification, verificationScenario.current.transactions[0]);
+  result = await verificationScenario.current.engine.reconcile();
+  assert.equal(result.created, 0);assert.equal(result.conflicts, 1);assert.equal(result.pending, true);
+  assert.equal(verificationScenario.records.get(verificationScenario.eventId).status, 'cancelled');
+  assert.equal(verificationScenario.current.saved.createIds.verificacion, true);
+  console.log('ok - una verificación todavía cancelled no informa created y conserva el alta');
+
+  const staleRestore = await cancelledScenario('restore-412');
+  staleRestore.shared.changeOnNextWrite({ summary: 'Cambio concurrente durante restauración' });
+  const paidBefore412 = clone(staleRestore.current.transactions[0]);
+  staleRestore.current.transactions = [{ ...paidBefore412, status: 'pending' }];
+  staleRestore.current.engine.noteChange('restore-412', paidBefore412, staleRestore.current.transactions[0]);
+  result = await staleRestore.current.engine.reconcile();
+  assert.equal(result.created, 0);assert.equal(result.conflicts, 1);assert.equal(result.pending, true);
+  assert.equal(staleRestore.current.saved.createIds['restore-412'], true);
+  assert.equal(staleRestore.records.get(staleRestore.eventId).status, 'cancelled');
+  console.log('ok - HTTP 412 al restaurar conserva la intención y la lápida remota');
+
+  const missingEtag = await cancelledScenario('sin-etag');
+  const tombstoneWithoutEtag = clone(missingEtag.records.get(missingEtag.eventId));delete tombstoneWithoutEtag.etag;
+  missingEtag.records.set(missingEtag.eventId, tombstoneWithoutEtag);
+  const patchesBeforeMissingEtag = missingEtag.shared.calls.filter(call => call.method === 'PATCH').length;
+  const paidWithoutEtag = clone(missingEtag.current.transactions[0]);
+  missingEtag.current.transactions = [{ ...paidWithoutEtag, status: 'pending' }];
+  missingEtag.current.engine.noteChange('sin-etag', paidWithoutEtag, missingEtag.current.transactions[0]);
+  result = await missingEtag.current.engine.reconcile();
+  assert.equal(result.created, 0);assert.equal(result.conflicts, 1);assert.equal(result.pending, true);
+  assert.equal(missingEtag.current.saved.createIds['sin-etag'], true);
+  assert.equal(missingEtag.shared.calls.filter(call => call.method === 'PATCH').length, patchesBeforeMissingEtag);
+  console.log('ok - lápida sin ETag queda pendiente sin intentar una escritura insegura');
+
+  const lostRestore = await cancelledScenario('restore-perdida');
+  lostRestore.shared.onNextPatch(() => { throw Error('Respuesta perdida al restaurar'); });
+  const paidBeforeLostResponse = clone(lostRestore.current.transactions[0]);
+  lostRestore.current.transactions = [{ ...paidBeforeLostResponse, status: 'pending' }];
+  lostRestore.current.engine.noteChange('restore-perdida', paidBeforeLostResponse, lostRestore.current.transactions[0]);
+  await assert.rejects(lostRestore.current.engine.reconcile(), /Respuesta perdida al restaurar/);
+  assert.equal(lostRestore.records.get(lostRestore.eventId).status, 'confirmed');
+  assert.equal(lostRestore.current.saved.createIds['restore-perdida'], true);
+  result = await lostRestore.current.engine.reconcile();
+  assert.equal(result.created, 0);assert.equal(result.conflicts, 0);
+  assert.equal(lostRestore.current.saved.createIds['restore-perdida'], undefined);
+  console.log('ok - respuesta perdida al restaurar se recupera sin duplicar ni repetir PATCH');
+
+  const activeDuplicate = api(), activeOwner = device(activeDuplicate, [expense('duplicado-activo')]);
+  await activeOwner.engine.authorize();assert.equal((await activeOwner.engine.reconcile()).created, 1);
+  const activeFollower = device(activeDuplicate, [expense('duplicado-activo')], true, { calendarId: activeOwner.engine.calendarId });
+  activeFollower.engine.noteCreate('duplicado-activo');await activeFollower.engine.authorize();activeDuplicate.hideNextList();
+  result = await activeFollower.engine.reconcile();
+  assert.equal(result.created, 1);assert.equal(result.conflicts, 0);
+  assert.equal(activeFollower.saved.createIds['duplicado-activo'], undefined);
+  console.log('ok - HTTP 409 activo e íntegro conserva la recuperación idempotente');
+
+  const markerCollision = api(), markerOwner = device(markerCollision, [expense('marcador-ajeno')]);
+  await markerOwner.engine.authorize();await markerOwner.engine.reconcile();
+  const markerRecords = markerCollision.events.get(markerOwner.engine.calendarId), markerId = markerOwner.win.MisFinanzasCalendar.eventId('marcador-ajeno');
+  const markerEvent = markerRecords.get(markerId);
+  markerRecords.set(markerId, { ...markerEvent, extendedProperties: { private: { source: 'otro-origen', movementId: 'marcador-ajeno' } } });
+  const markerFollower = device(markerCollision, [expense('marcador-ajeno')], true, { calendarId: markerOwner.engine.calendarId });
+  markerFollower.engine.noteCreate('marcador-ajeno');await markerFollower.engine.authorize();
+  result = await markerFollower.engine.reconcile();
+  assert.equal(result.created, 0);assert.equal(result.conflicts, 1);assert.equal(result.pending, true);
+  assert.equal(markerFollower.saved.createIds['marcador-ajeno'], true);
+  console.log('ok - HTTP 409 activo con marcador ajeno no se acepta como creación propia');
 
   const race = api(), editingDuringPatch = device(race, [expense('edicion')]);
   await editingDuringPatch.engine.authorize();await editingDuringPatch.engine.reconcile();

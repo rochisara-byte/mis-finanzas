@@ -13,9 +13,9 @@ const remindersValid=value=>Array.isArray(value)&&value.length<=5&&new Set(value
 const eventId=id=>{const hex=Array.from(new TextEncoder().encode(OWNER+':'+id),b=>b.toString(16).padStart(2,'0')).join('');if(hex.length+2>1024)throw Error('ID de movimiento demasiado largo para Calendar');return 'mf'+hex};
 const nextDay=s=>{const d=new Date(s+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)};
 const link=id=>new URL('./?movimiento='+encodeURIComponent(id),global.location.href).href;
-const event=(t,minutes=DEFAULT_REMINDERS)=>{const v=normalize(t);return {id:eventId(v.id),summary:v.title+' — '+new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(v.amount),description:'Pago pendiente en Mis Finanzas\n'+link(v.id),start:{date:v.date},end:{date:nextDay(v.date)},transparency:'transparent',extendedProperties:{private:{source:OWNER,movementId:v.id}},reminders:{useDefault:false,overrides:minutes.map(n=>({method:'popup',minutes:n}))}}};
+const event=(t,minutes=DEFAULT_REMINDERS)=>{const v=normalize(t);return {id:eventId(v.id),status:'confirmed',summary:v.title+' — '+new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(v.amount),description:'Pago pendiente en Mis Finanzas\n'+link(v.id),start:{date:v.date},end:{date:nextDay(v.date)},transparency:'transparent',extendedProperties:{private:{source:OWNER,movementId:v.id}},reminders:{useDefault:false,overrides:minutes.map(n=>({method:'popup',minutes:n}))}}};
 const reminderSet=r=>JSON.stringify((r?.overrides||[]).map(x=>[x.method,x.minutes]).sort((a,b)=>a[1]-b[1]));
-const same=(a,b)=>a.summary===b.summary&&a.description===b.description&&a.start?.date===b.start.date&&a.end?.date===b.end.date&&a.reminders?.useDefault===b.reminders.useDefault&&reminderSet(a.reminders)===reminderSet(b.reminders);
+const same=(a,b)=>a.status===b.status&&a.summary===b.summary&&a.description===b.description&&a.start?.date===b.start.date&&a.end?.date===b.end.date&&a.transparency===b.transparency&&a.extendedProperties?.private?.source===b.extendedProperties.private.source&&a.extendedProperties?.private?.movementId===b.extendedProperties.private.movementId&&a.reminders?.useDefault===b.reminders.useDefault&&reminderSet(a.reminders)===reminderSet(b.reminders);
 function create({clientId,readTransactions,loadState=()=>({}),saveState=()=>{},onStatus=()=>{},allowConditionalMutations=false}){
  if(!clientId||typeof readTransactions!=='function')throw Error('Falta la configuración de Calendar');
  const prepared=value=>{const next=value&&typeof value==='object'?value:{};
@@ -134,7 +134,7 @@ function create({clientId,readTransactions,loadState=()=>({}),saveState=()=>{},o
      if(!allowConditionalMutations){conflicts++;continue;}
      const sentOp=JSON.stringify(op);
      if(desired){try{await request(path(calendarId)+'/events/'+encodeURIComponent(old.id),'PATCH',
-      {summary:desired.summary,description:desired.description,start:desired.start,end:desired.end,reminders:desired.reminders},old.etag);
+      {status:desired.status,summary:desired.summary,description:desired.description,start:desired.start,end:desired.end,transparency:desired.transparency,extendedProperties:desired.extendedProperties,reminders:desired.reminders},old.etag);
       }catch(e){if(e.status===412){conflicts++;continue}throw e}
       const checked=await request(path(calendarId)+'/events/'+encodeURIComponent(old.id));
       if(!same(checked,desired))throw Error('No se verificó la actualización del evento');updated++;
@@ -161,9 +161,18 @@ function create({clientId,readTransactions,loadState=()=>({}),saveState=()=>{},o
     }
     if(!desired){if(op||state.createIds[id]){delete state.ops[id];delete state.createIds[id];persist();}continue;}
     if((op&&!state.createIds[id])||(!state.bootstrap&&!state.createIds[id])){conflicts++;continue;}
-    try{await request(path(calendarId)+'/events','POST',desired);}catch(e){if(e.status!==409)throw e;}
-    const checked=await request(path(calendarId)+'/events/'+encodeURIComponent(desired.id));
-    if(!same(checked,desired))throw Error('El evento creado difiere de la copia local');created++;
+    let duplicate=false;
+    try{await request(path(calendarId)+'/events','POST',desired);}catch(e){if(e.status!==409)throw e;duplicate=true}
+    let checked;
+    try{checked=await request(path(calendarId)+'/events/'+encodeURIComponent(desired.id))}catch(e){if(e.status===404){pending=true;conflicts++;continue}throw e}
+    if(checked.status==='cancelled'){
+     if(!duplicate||!allowConditionalMutations||!checked.etag){pending=true;conflicts++;continue}
+     try{await request(path(calendarId)+'/events/'+encodeURIComponent(desired.id),'PATCH',
+      {status:desired.status,summary:desired.summary,description:desired.description,start:desired.start,end:desired.end,transparency:desired.transparency,extendedProperties:desired.extendedProperties,reminders:desired.reminders},checked.etag);
+     }catch(e){if(e.status===412){pending=true;conflicts++;continue}throw e}
+     try{checked=await request(path(calendarId)+'/events/'+encodeURIComponent(desired.id))}catch(e){if(e.status===404){pending=true;conflicts++;continue}throw e}
+    }
+    if(!same(checked,desired)){pending=true;conflicts++;continue}created++;
     refresh();
     const now=latestDesired();
     if(JSON.stringify(now)!==JSON.stringify(sent)||JSON.stringify(state.reminders)!==JSON.stringify(reminders)){

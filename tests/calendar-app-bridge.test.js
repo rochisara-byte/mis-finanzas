@@ -31,23 +31,29 @@ async function main() {
         const url = new URL(input);
         if (!url.href.startsWith('https://www.googleapis.com/calendar/v3/')) return original(input, options);
         const method = options.method || 'GET', parts = url.pathname.split('/').filter(Boolean);
-        calls.push({ method, path: url.pathname, ifMatch: options.headers?.['If-Match'] });
+        calls.push({ method, path: url.pathname, ifMatch: options.headers?.['If-Match'],
+          body: options.body ? JSON.parse(options.body) : undefined });
         if (url.pathname.endsWith('/users/me/calendarList')) return reply(200, { items: [] });
         if (parts.length === 3 && parts[2] === 'calendars' && method === 'POST') return reply(200, { id: 'cal-ficticio' });
         if (parts.length === 4 && parts[2] === 'calendars') return reply(200, { id: 'cal-ficticio', summary: 'Mis Finanzas · Pagos', description: 'Calendario privado creado por Mis Finanzas (mis-finanzas-v27).' });
-        if (parts.length === 5 && method === 'GET') return reply(200, { items: [...events.values()] });
+        if (parts.length === 5 && method === 'GET') return reply(200, { items: [...events.values()].filter(item => item.status !== 'cancelled') });
         if (parts.length === 5 && method === 'POST') {
           const item = JSON.parse(options.body);
           if (events.has(item.id)) return reply(409, {});
-          events.set(item.id, { ...item, etag: '"1"' }); return reply(200, events.get(item.id));
+          events.set(item.id, { ...item, status: item.status || 'confirmed', etag: '"1"' }); return reply(200, events.get(item.id));
         }
         const id = decodeURIComponent(parts[5] || ''), old = events.get(id);
         if (!old) return reply(404, {});
         if (method === 'GET') return reply(200, old);
         if (options.headers?.['If-Match'] !== old.etag) return reply(412, {});
-        if (method === 'DELETE') { events.delete(id); return reply(204, null); }
+        if (method === 'DELETE') {
+          const version = Number(old.etag.replace(/\D/g, '')) + 1;
+          events.set(id, { ...old, status: 'cancelled', etag: `"${version}"` });
+          return reply(204, null);
+        }
         if (method === 'PATCH') {
-          const item = { ...old, ...JSON.parse(options.body), etag: '"2"' };
+          const version = Number(old.etag.replace(/\D/g, '')) + 1;
+          const item = { ...old, ...JSON.parse(options.body), etag: `"${version}"` };
           events.set(id, item); return reply(200, item);
         }
         return reply(404, {});
@@ -58,7 +64,7 @@ async function main() {
     await secondTab.goto(address);
     await page.locator('#calendarConnectButton').click();
     await page.locator('#calendarEnable').click();
-    await page.waitForFunction(() => window.__calendarFake.events.size === 1);
+    await page.waitForFunction(() => [...window.__calendarFake.events.values()].filter(item => item.status !== 'cancelled').length === 1);
     assert.equal(await page.evaluate(() => window.__calendarFake.calls.some(call => call.path.endsWith('/users/me/calendarList'))), false);
     assert.equal(await page.evaluate(() => total()), 5000);
     await page.locator('#calendarClose').click();
@@ -66,24 +72,27 @@ async function main() {
     await page.evaluate(() => transactionForm('pago'));
     await page.locator('#modal #quickEntry').fill('Pago editado 1400');
     await page.locator('#modal .quick-save').click();
-    await page.waitForFunction(() => [...window.__calendarFake.events.values()][0]?.summary.includes('Pago editado'));
+    await page.waitForFunction(() => [...window.__calendarFake.events.values()].find(item => item.status !== 'cancelled')?.summary.includes('Pago editado'));
     assert.equal(await page.evaluate(key => JSON.parse(localStorage.getItem(key)).transactions[0].amount, key), 1400);
     assert.equal(await page.evaluate(() => total()), 5000);
 
     await page.evaluate(() => mark('pago'));
-    await page.waitForFunction(() => window.__calendarFake.events.size === 0);
+    await page.waitForFunction(() => [...window.__calendarFake.events.values()].filter(item => item.status !== 'cancelled').length === 0);
+    assert.equal(await page.evaluate(() => [...window.__calendarFake.events.values()][0]?.status), 'cancelled');
     assert.equal(await page.evaluate(() => total()), 3600);
     await page.evaluate(() => mark('pago'));
-    await page.waitForFunction(() => window.__calendarFake.events.size === 1);
+    await page.waitForFunction(() => [...window.__calendarFake.events.values()].filter(item => item.status !== 'cancelled').length === 1);
+    assert.equal(await page.evaluate(() => [...window.__calendarFake.events.values()][0]?.status), 'confirmed');
+    assert.equal(await page.evaluate(() => window.__calendarFake.calls.some(call => call.method === 'PATCH' && call.ifMatch && call.body?.status === 'confirmed')), true);
     assert.equal(await page.evaluate(() => total()), 5000);
 
     await page.evaluate(() => { const t = db.transactions.find(x => x.id === 'pago');t.repeat = 'monthly';t.recurrenceAmount = t.amount;persist(); });
     await page.evaluate(() => mark('pago'));
     await page.waitForFunction(() => {
-      const values = [...window.__calendarFake.events.values()];
+      const values = [...window.__calendarFake.events.values()].filter(item => item.status !== 'cancelled');
       return values.length === 1 && values[0].extendedProperties.private.movementId !== 'pago';
     });
-    const result = await page.evaluate(key => ({ db: JSON.parse(localStorage.getItem(key)), events: [...window.__calendarFake.events.values()], calls: window.__calendarFake.calls }), key);
+    const result = await page.evaluate(key => ({ db: JSON.parse(localStorage.getItem(key)), events: [...window.__calendarFake.events.values()].filter(item => item.status !== 'cancelled'), calls: window.__calendarFake.calls }), key);
     const child = result.db.transactions.find(t => t.recurrenceParentId === 'pago');
     assert.ok(child);
     assert.equal(result.events[0].extendedProperties.private.movementId, child.id);
@@ -93,9 +102,9 @@ async function main() {
     await page.evaluate(id => transactionForm(id), child.id);
     await page.locator('#modal #quickEntry').fill('Pago sin conexión 1400');
     await page.locator('#modal .quick-save').click();
-    assert.equal(await page.evaluate(() => [...window.__calendarFake.events.values()][0].summary.includes('Pago sin conexión')), false);
+    assert.equal(await page.evaluate(() => [...window.__calendarFake.events.values()].find(item => item.status !== 'cancelled').summary.includes('Pago sin conexión')), false);
     await page.context().setOffline(false);
-    await page.waitForFunction(() => [...window.__calendarFake.events.values()][0]?.summary.includes('Pago sin conexión'));
+    await page.waitForFunction(() => [...window.__calendarFake.events.values()].find(item => item.status !== 'cancelled')?.summary.includes('Pago sin conexión'));
 
     await page.evaluate(id => transactionForm(id), child.id);
     await page.locator('#modal .quick-details > summary').click();
@@ -105,10 +114,10 @@ async function main() {
     await page.locator('#modal .quick-save').click();
     await page.evaluate(id => mark(id), child.id);
     await page.waitForFunction(id => {
-      const values = [...window.__calendarFake.events.values()];
+      const values = [...window.__calendarFake.events.values()].filter(item => item.status !== 'cancelled');
       return values.length === 1 && values[0].extendedProperties.private.movementId !== id;
     }, child.id);
-    const later = await page.evaluate(key => ({ db: JSON.parse(localStorage.getItem(key)), events: [...window.__calendarFake.events.values()] }), key);
+    const later = await page.evaluate(key => ({ db: JSON.parse(localStorage.getItem(key)), events: [...window.__calendarFake.events.values()].filter(item => item.status !== 'cancelled') }), key);
     const grandchild = later.db.transactions.find(t => t.recurrenceParentId === child.id);
     assert.ok(grandchild);
     assert.equal(grandchild.wishId, '');
