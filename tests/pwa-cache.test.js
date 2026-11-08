@@ -9,6 +9,8 @@ const root = path.resolve(__dirname, '..');
 const assets = [
   'index.html',
   'manifest.webmanifest',
+  'calendar-sync.js',
+  'calendar-ui.js',
   'icons/icon-192.png',
   'icons/icon-512.png',
   'icons/icon-maskable-512.png',
@@ -89,6 +91,7 @@ for (const url of [
   'https://accounts.google.com/o/oauth2/v2/auth',
   'https://oauth2.googleapis.com/token',
   'https://www.googleapis.com/drive/v3/files',
+  'https://www.googleapis.com/calendar/v3/calendars',
   'https://ejemplo.test/mis-finanzas/drive/v3/files',
 ]) {
   let intercepted = false;

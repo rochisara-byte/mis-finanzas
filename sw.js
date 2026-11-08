@@ -1,5 +1,5 @@
-const CACHE_VERSION = 17;
-const SHELL_DIGEST = 'c8a0e0b9beeecf7d0faccbbaabd8b132f3e3e4923719231bec17109ac9cec0e6';
+const CACHE_VERSION = 21;
+const SHELL_DIGEST = '569ff6cee5a8049c3f56811f12cc0c01223c37daa4ba8b8e522e300406db8783';
 const SHELL_CACHE = `mis-finanzas-shell-v${CACHE_VERSION}`;
 const SHELL_PREFIX = 'mis-finanzas-shell-v';
 const root = new URL('./', self.registration.scope);
@@ -8,6 +8,8 @@ const shellUrls = [
   root,
   index,
   new URL('manifest.webmanifest', root),
+  new URL('calendar-sync.js', root),
+  new URL('calendar-ui.js', root),
   new URL('icons/icon-192.png', root),
   new URL('icons/icon-512.png', root),
   new URL('icons/icon-maskable-512.png', root),
