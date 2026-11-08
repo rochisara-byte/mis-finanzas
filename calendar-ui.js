@@ -70,9 +70,13 @@ window.addEventListener('storage',e=>{if(e.key===PREF){baseline=copy(prefs());en
 window.addEventListener('online',schedule);
 button.onclick=()=>{renderReminders();idField.value=engine.calendarId;dialog.showModal()};
 dialog.querySelector('#calendarClose').onclick=()=>dialog.close();
-dialog.querySelector('#calendarEnable').onclick=async()=>{try{status('Esperando autorización…');await engine.authorize();const id=existingField.value.trim();
- if(id&&id!==engine.calendarId){if(engine.calendarId&&!confirm('Cambiar el calendario vinculado requiere revisar los eventos anteriores. ¿Continuar?'))return;await engine.attachCalendar(id)}
- else if(!engine.calendarId&&!engine.creationPending&&!confirm('No hay un calendario vinculado en este dispositivo. Si ya lo creaste en otro, cancela e introduce su ID. ¿Crear un calendario nuevo?')){status('Introduce el ID existente o confirma la creación de uno nuevo.');return}
+dialog.querySelector('#calendarEnable').onclick=async()=>{try{const id=existingField.value.trim();
+ if(id&&id!==engine.calendarId){if(engine.calendarId&&!confirm('Cambiar el calendario vinculado requiere revisar los eventos anteriores. ¿Continuar?'))return;status('Esperando autorización…');await engine.authorize();await engine.attachCalendar(id)}
+ else if(!engine.calendarId){
+  if(engine.creationPending){setAttention('La creación anterior no confirmó su ID. Localízalo en Google Calendar e introdúcelo para vincularlo; no se creará otro.');return}
+  if(!confirm('No hay un calendario vinculado en este dispositivo. Si ya lo creaste en otro, cancela e introduce su ID. ¿Crear un calendario nuevo?')){engine.disable();status('Creación cancelada. Calendar permanece desconectado; introduce un ID o vuelve a confirmar para crear.');return}
+  status('Esperando autorización…');await engine.authorize();await engine.createCalendar();
+ }else{status('Esperando autorización…');await engine.authorize();engine.enable()}
  await sync()}catch(e){setAttention('No se pudo conectar: '+e.message)}};
 dialog.querySelector('#calendarSync').onclick=sync;
 dialog.querySelector('#calendarDisable').onclick=()=>{engine.disable();setAttention('Desconectado. Los eventos existentes permanecen en Calendar.')};

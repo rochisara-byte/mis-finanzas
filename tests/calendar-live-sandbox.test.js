@@ -11,7 +11,7 @@ async function main() {
     const page = await browser.newPage();
     await page.route('https://ensayo.example/**', route => route.fulfill({ status: 200,
       contentType: 'text/html; charset=utf-8', body: pageHtml }));
-    const writes = [];
+    const writes = [], paths = [];
     const calendars = new Map([['existing', { id: 'existing', summary: 'Personal', description: 'No tocar' }]]);
     const events = new Map();
     await page.addInitScript(() => {
@@ -24,6 +24,7 @@ async function main() {
       const request = route.request(), url = new URL(request.url());
       const parts = url.pathname.split('/').filter(Boolean);
       const method = request.method(), calendarId = parts[3], eventId = parts[5];
+      paths.push(url.pathname);
       const body = request.postDataJSON() || {};
       const respond = (status, data = {}) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data),
         headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS' } });
@@ -56,6 +57,7 @@ async function main() {
     await page.waitForFunction(() => document.querySelector('#log').textContent.includes('RESULTADO: ambas condiciones'));
     assert.equal(await page.locator('#start').isDisabled(), true);
     assert.equal(calendars.has('existing'), true);
+    assert.equal(paths.some(item => item.includes('/calendarList')), false);
     assert.ok(writes.every(x => !x.calendarId || x.calendarId === 'ensayo'));
     await page.reload();
     assert.equal(await page.locator('#start').isDisabled(), true);
@@ -65,6 +67,49 @@ async function main() {
     assert.equal(calendars.has('existing'), true);
     assert.equal(await page.locator('#start').isEnabled(), true);
     await page.close();
+
+    const ambiguous = await browser.newPage(), ambiguousPaths = [], ambiguousWrites = [];
+    await ambiguous.addInitScript(() => {
+      window.google = { accounts: { oauth2: { initTokenClient(options) {
+        return { requestAccessToken() { options.callback({ access_token: 'ficticio', expires_in: 3600, scope: options.scope }); } };
+      } } } };
+    });
+    await ambiguous.route('https://accounts.google.com/**', route => route.abort());
+    await ambiguous.route('https://ensayo.example/**', route => route.fulfill({ status: 200,
+      contentType: 'text/html; charset=utf-8', body: pageHtml }));
+    await ambiguous.route('https://www.googleapis.com/calendar/v3/**', async route => {
+      const request = route.request(), url = new URL(request.url()), parts = url.pathname.split('/').filter(Boolean);
+      const method = request.method(), calendarId = parts[3], body = request.postDataJSON() || {};
+      ambiguousPaths.push(url.pathname);if (method !== 'GET') ambiguousWrites.push({ method, calendarId, path: url.pathname });
+      const respond = (status, data = {}) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data),
+        headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS' } });
+      if (method === 'POST' && parts.length === 3) {
+        calendars.set('ambiguo', { id: 'ambiguo', ...body });events.set('ambiguo', new Map());return respond(200, {});
+      }
+      if (parts.length === 4) {
+        if (method === 'GET') return respond(calendars.has(calendarId) ? 200 : 404, calendars.get(calendarId));
+        if (method === 'DELETE') { calendars.delete(calendarId);events.delete(calendarId);return respond(204); }
+      }
+      return respond(404);
+    });
+    await ambiguous.goto('https://ensayo.example/');await ambiguous.locator('#start').click();
+    await ambiguous.waitForFunction(() => document.querySelector('#log').textContent.includes('Google no confirmó el ID'));
+    const blockedRecord = await ambiguous.evaluate(() => JSON.parse(localStorage.getItem('mis-finanzas-calendar-live-sandbox-v1')));
+    assert.equal(blockedRecord.id, null);assert.equal(calendars.has('ambiguo'), true);
+    assert.equal(await ambiguous.locator('#start').isDisabled(), true);assert.equal(await ambiguous.locator('#recovery').isVisible(), true);
+    assert.equal(ambiguousPaths.some(item => item.includes('/calendarList')), false);
+    await ambiguous.locator('#recoveryId').fill('existing');await ambiguous.locator('#cleanup').click();
+    await ambiguous.waitForFunction(() => document.querySelector('#log').textContent.includes('El ID recuperado no coincide'));
+    assert.equal(calendars.has('existing'), true);assert.equal(calendars.has('ambiguo'), true);
+    await ambiguous.locator('#recoveryId').fill('ambiguo');await ambiguous.locator('#cleanup').click();
+    await ambiguous.waitForFunction(() => document.querySelector('#log').textContent.includes('Calendario temporal eliminado'));
+    assert.equal(calendars.has('ambiguo'), false);assert.equal(calendars.has('existing'), true);
+    assert.equal(await ambiguous.evaluate(() => localStorage.getItem('mis-finanzas-calendar-live-sandbox-v1')), null);
+    assert.equal(ambiguousPaths.some(item => item.includes('/calendarList')), false);
+    assert.equal(ambiguousWrites.filter(item => item.method === 'POST' && item.path.endsWith('/calendars')).length, 1);
+    await ambiguous.close();
+    console.log('ok - respuesta ambigua bloquea duplicados y permite pegar, verificar y limpiar el ID sin calendarList');
+
     const wrongOrigin = await browser.newPage();
     await wrongOrigin.route('https://rochisara-byte.github.io/**', route => route.fulfill({ status: 200,
       contentType: 'text/html; charset=utf-8', body: pageHtml }));

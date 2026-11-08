@@ -94,9 +94,15 @@ function device(shared, initial = [], allowConditionalMutations = true, initialS
     get saved() { return clone(saved); }, get requests() { return requests; } };
 }
 
+async function connect(target) {
+  await target.engine.authorize();
+  if (target.engine.calendarId) target.engine.enable();
+  else await target.engine.createCalendar();
+}
+
 async function cancelledScenario(id) {
   const shared = api(), current = device(shared, [expense(id)]);
-  await current.engine.authorize();assert.equal((await current.engine.reconcile()).created, 1);
+  await connect(current);assert.equal((await current.engine.reconcile()).created, 1);
   const calendarId = current.engine.calendarId, records = shared.events.get(calendarId), eventId = current.win.MisFinanzasCalendar.eventId(id);
   const before = clone(current.transactions[0]);
   current.transactions = [{ ...before, status: 'done' }];current.engine.noteChange(id, before, current.transactions[0]);
@@ -109,6 +115,10 @@ async function main() {
   const shared = api(), first = device(shared, [expense('uno'), expense('futuro', { repeat: 'monthly', recurrenceParentId: 'uno' })]);
   assert.equal((await first.engine.reconcile()).skipped, 'disabled');
   await first.engine.authorize();
+  assert.equal(first.engine.authorized, true);assert.equal(first.engine.enabled, false);
+  assert.equal((await first.engine.reconcile()).skipped, 'disabled');
+  assert.equal(shared.calendars.size, 0);
+  await first.engine.createCalendar();
   let result = await first.engine.reconcile();
   assert.equal(result.created, 2);
   assert.equal((await first.engine.reconcile()).created, 0);
@@ -138,7 +148,7 @@ async function main() {
   console.log('ok - crear, editar, pagar, recurrencia futura, revertir, borrar y reintentar');
 
   const second = device(shared, [expense('futuro', { repeat: 'monthly', recurrenceParentId: 'uno' })], true, { calendarId });
-  await second.engine.authorize();
+  await connect(second);
   assert.equal((await second.engine.reconcile()).removed, 0);
   assert.equal(records.size, 1);
   const beforePayment = clone(second.transactions[0]);
@@ -149,23 +159,23 @@ async function main() {
   result = await second.engine.reconcile();assert.equal(result.conflicts, 1);assert.equal(result.removed, 0);
   assert.equal(records.size, 1);
   const stale = device(shared, [expense('uno')], true, { calendarId });
-  await stale.engine.authorize();
+  await connect(stale);
   result = await stale.engine.reconcile();
   assert.equal(result.created, 0);assert.equal(result.conflicts, 1);
   console.log('ok - dos dispositivos no borran ausentes ni cambios concurrentes');
 
   const third = device(shared, [expense('offline')], true, { calendarId });
   third.engine.noteCreate('offline');
-  await third.engine.authorize();
+  await connect(third);
   third.win.navigator.onLine = false;shared.setOffline(true);
   assert.equal((await third.engine.reconcile()).skipped, 'offline');
   const restarted = device(shared, third.transactions, true, third.saved);
-  shared.setOffline(false);await restarted.engine.authorize();
+  shared.setOffline(false);await connect(restarted);
   shared.loseNextPost();await assert.rejects(restarted.engine.reconcile(), /Respuesta perdida/);
   assert.equal((await restarted.engine.reconcile()).created, 0);
   assert.equal([...records.values()].filter(x => x.extendedProperties.private.movementId === 'offline').length, 1);
   const locked = device(shared, [expense('offline', { amount: 1300 })], false, { calendarId });
-  await locked.engine.authorize();
+  await connect(locked);
   locked.engine.noteChange('offline', expense('offline'), locked.transactions[0]);
   const writesBefore = shared.calls.filter(x => x.method === 'PATCH').length;
   assert.equal((await locked.engine.reconcile()).conflicts, 1);
@@ -173,7 +183,7 @@ async function main() {
   restarted.engine.setReminders([20160, 0], restarted.transactions);
   assert.equal((await restarted.engine.reconcile()).updated, 1);
   const downloadedPayment = device(shared, [expense('offline', { status: 'done' })], true, { calendarId });
-  await downloadedPayment.engine.authorize();
+  await connect(downloadedPayment);
   assert.equal((await downloadedPayment.engine.reconcile()).conflicts, 1);
   assert.ok(records.has(downloadedPayment.win.MisFinanzasCalendar.eventId('offline')));
   assert.throws(() => restarted.engine.setReminders([40321], restarted.transactions), /hasta cinco/);
@@ -183,7 +193,7 @@ async function main() {
   console.log('ok - offline, respuesta perdida, paginación, recordatorios y escritura condicional');
 
   const editing = device(shared, [expense('offline')], true, { calendarId, reminders: [20160, 0] });
-  await editing.engine.authorize();
+  await connect(editing);
   editing.transactions = [expense('offline', { title: 'Edición ficticia' })];
   editing.engine.noteChange('offline', expense('offline'), editing.transactions[0]);
   shared.changeOnNextWrite({ summary: 'Edición desde otro dispositivo' });
@@ -195,7 +205,7 @@ async function main() {
 
   const deleting = device(shared, [expense('delete-race')], true, { calendarId });
   deleting.engine.noteCreate('delete-race');
-  await deleting.engine.authorize();
+  await connect(deleting);
   assert.equal((await deleting.engine.reconcile()).created, 1);
   deleting.transactions = [expense('delete-race', { status: 'done' })];
   deleting.engine.noteChange('delete-race', expense('delete-race'), deleting.transactions[0]);
@@ -211,7 +221,7 @@ async function main() {
   pending.transactions = [expense('sin-red', { date: '2026-11-22', amount: 2500 })];
   pending.engine.noteChange('sin-red', expense('sin-red'), pending.transactions[0]);
   assert.ok(pending.saved.createIds['sin-red']);
-  await pending.engine.authorize();
+  await connect(pending);
   assert.equal((await pending.engine.reconcile()).created, 1);
   const freshId = pending.engine.calendarId;
   assert.equal(fresh.events.get(freshId).get(pending.win.MisFinanzasCalendar.eventId('sin-red')).start.date, '2026-11-22');
@@ -298,28 +308,28 @@ async function main() {
   console.log('ok - respuesta perdida al restaurar se recupera sin duplicar ni repetir PATCH');
 
   const activeDuplicate = api(), activeOwner = device(activeDuplicate, [expense('duplicado-activo')]);
-  await activeOwner.engine.authorize();assert.equal((await activeOwner.engine.reconcile()).created, 1);
+  await connect(activeOwner);assert.equal((await activeOwner.engine.reconcile()).created, 1);
   const activeFollower = device(activeDuplicate, [expense('duplicado-activo')], true, { calendarId: activeOwner.engine.calendarId });
-  activeFollower.engine.noteCreate('duplicado-activo');await activeFollower.engine.authorize();activeDuplicate.hideNextList();
+  activeFollower.engine.noteCreate('duplicado-activo');await connect(activeFollower);activeDuplicate.hideNextList();
   result = await activeFollower.engine.reconcile();
   assert.equal(result.created, 1);assert.equal(result.conflicts, 0);
   assert.equal(activeFollower.saved.createIds['duplicado-activo'], undefined);
   console.log('ok - HTTP 409 activo e íntegro conserva la recuperación idempotente');
 
   const markerCollision = api(), markerOwner = device(markerCollision, [expense('marcador-ajeno')]);
-  await markerOwner.engine.authorize();await markerOwner.engine.reconcile();
+  await connect(markerOwner);await markerOwner.engine.reconcile();
   const markerRecords = markerCollision.events.get(markerOwner.engine.calendarId), markerId = markerOwner.win.MisFinanzasCalendar.eventId('marcador-ajeno');
   const markerEvent = markerRecords.get(markerId);
   markerRecords.set(markerId, { ...markerEvent, extendedProperties: { private: { source: 'otro-origen', movementId: 'marcador-ajeno' } } });
   const markerFollower = device(markerCollision, [expense('marcador-ajeno')], true, { calendarId: markerOwner.engine.calendarId });
-  markerFollower.engine.noteCreate('marcador-ajeno');await markerFollower.engine.authorize();
+  markerFollower.engine.noteCreate('marcador-ajeno');await connect(markerFollower);
   result = await markerFollower.engine.reconcile();
   assert.equal(result.created, 0);assert.equal(result.conflicts, 1);assert.equal(result.pending, true);
   assert.equal(markerFollower.saved.createIds['marcador-ajeno'], true);
   console.log('ok - HTTP 409 activo con marcador ajeno no se acepta como creación propia');
 
   const race = api(), editingDuringPatch = device(race, [expense('edicion')]);
-  await editingDuringPatch.engine.authorize();await editingDuringPatch.engine.reconcile();
+  await connect(editingDuringPatch);await editingDuringPatch.engine.reconcile();
   const oldRace = clone(editingDuringPatch.transactions[0]);
   editingDuringPatch.transactions = [expense('edicion', { amount: 2200 })];
   editingDuringPatch.engine.noteChange('edicion', oldRace, editingDuringPatch.transactions[0]);
@@ -336,7 +346,7 @@ async function main() {
   console.log('ok - pago durante PATCH preserva la operación posterior');
 
   const restored = api(), restoreDevice = device(restored, [expense('restaurado')]);
-  await restoreDevice.engine.authorize();await restoreDevice.engine.reconcile();
+  await connect(restoreDevice);await restoreDevice.engine.reconcile();
   restoreDevice.transactions = [expense('restaurado', { amount: 3000 })];
   restoreDevice.engine.noteChange('restaurado', expense('restaurado'), restoreDevice.transactions[0]);
   restoreDevice.engine.noteReplacement();

@@ -19,6 +19,7 @@ const same=(a,b)=>a.status===b.status&&a.summary===b.summary&&a.description===b.
 function create({clientId,readTransactions,loadState=()=>({}),saveState=()=>{},onStatus=()=>{},allowConditionalMutations=false}){
  if(!clientId||typeof readTransactions!=='function')throw Error('Falta la configuración de Calendar');
  const prepared=value=>{const next=value&&typeof value==='object'?value:{};
+  next.enabled=next.enabled===true;next.creationPending=next.creationPending===true;
   if(!remindersValid(next.reminders))next.reminders=DEFAULT_REMINDERS.slice();
   for(const key of ['ops','createIds','reviewIds'])if(!next[key]||typeof next[key]!=='object'||Array.isArray(next[key]))next[key]={};
   return next};
@@ -41,8 +42,7 @@ function create({clientId,readTransactions,loadState=()=>({}),saveState=()=>{},o
    const authClient=global.google.accounts.oauth2.initTokenClient({client_id:clientId,scope:SCOPE,
     error_callback:e=>finish(Error('No se pudo abrir Calendar: '+(e?.type||e?.message||'ventana bloqueada'))),
     callback:r=>{if(settled)return;if(r.error||!r.access_token)return finish(Error(r.error||'No se autorizó Calendar'));
-     token=r.access_token;expiry=Date.now()+(Number(r.expires_in)||3500)*1000;refresh();state.enabled=true;
-     try{persist();finish()}catch(e){token='';state.enabled=false;finish(e)}}});
+     token=r.access_token;expiry=Date.now()+(Number(r.expires_in)||3500)*1000;finish()}});
    authClient.requestAccessToken({prompt:token?'':'consent'});
   }catch(e){finish(e)}
  });return authorizing.finally(()=>{authorizing=null})}
@@ -53,7 +53,13 @@ function create({clientId,readTransactions,loadState=()=>({}),saveState=()=>{},o
     throw Error('El calendario guardado ya no pertenece a Mis Finanzas');
    }catch(e){if(e.status===404)throw Error('No se encontró el calendario guardado; no se creará otro automáticamente');throw e}
   }
-  if(state.creationPending)throw Error('La creación anterior del calendario no se confirmó; revisa Calendar antes de reintentar');
+  if(state.creationPending)throw Error('La creación anterior no confirmó su ID; localiza el calendario y vincúlalo manualmente');
+  throw Error('No hay un calendario vinculado; créalo o vincula su ID explícitamente');
+ }
+ async function createCalendar(){
+  refresh();
+  if(state.calendarId)return getCalendar();
+  if(state.creationPending)throw Error('La creación anterior no confirmó su ID; localiza el calendario y vincúlalo manualmente');
   state.creationPending=true;persist();
   let created;
   try{created=await request('/calendars','POST',{summary:NAME,timeZone:'America/Bogota',description:MARKER})}
@@ -62,14 +68,16 @@ function create({clientId,readTransactions,loadState=()=>({}),saveState=()=>{},o
   state.calendarId=created.id;state.creationPending=false;state.bootstrap=true;persist();
   const checked=await request(path(created.id));
   if(checked.summary!==NAME||checked.description!==MARKER)throw Error('No se verificó el calendario creado');
+  refresh();state.enabled=true;persist();
   return created.id;
  }
  async function attachCalendar(id){
   id=String(id||'').trim();if(!id||id.length>1024)throw Error('Indica un ID de calendario válido');
   const found=await request(path(id));
   if(found.id!==id||found.summary!==NAME||found.description!==MARKER)throw Error('El calendario indicado no pertenece a Mis Finanzas');
-  refresh();state.calendarId=id;state.creationPending=false;state.bootstrap=false;persist();return id;
+  refresh();state.calendarId=id;state.creationPending=false;state.bootstrap=false;state.enabled=true;persist();return id;
  }
+ function enable(){refresh();if(!state.calendarId)throw Error('Crea o vincula un calendario antes de habilitar la integración');state.enabled=true;persist()}
  async function listEvents(calendarId){
   const out=[],seen=new Set();let pageToken='';
   do{
@@ -186,7 +194,7 @@ function create({clientId,readTransactions,loadState=()=>({}),saveState=()=>{},o
   })();
   try{return await running}catch(e){status('Calendar pendiente: '+e.message);throw e}finally{running=null}
  }
- return {authorize,reconcile,attachCalendar,noteChange,noteCreate,noteReplacement,refreshState:refresh,setReminders,disable(){refresh();state.enabled=false;token='';expiry=0;persist();status('Calendar desconectado')},get enabled(){return state.enabled},get authorized(){return !!token&&Date.now()<expiry},get calendarId(){return state.calendarId||''},get creationPending(){return !!state.creationPending},get reminders(){return state.reminders.slice()},get scope(){return SCOPE}};
+ return {authorize,createCalendar,reconcile,attachCalendar,enable,noteChange,noteCreate,noteReplacement,refreshState:refresh,setReminders,disable(){refresh();state.enabled=false;token='';expiry=0;persist();status('Calendar desconectado')},get enabled(){return state.enabled},get authorized(){return !!token&&Date.now()<expiry},get calendarId(){return state.calendarId||''},get creationPending(){return !!state.creationPending},get reminders(){return state.reminders.slice()},get scope(){return SCOPE}};
 }
 global.MisFinanzasCalendar={create,eligible,event,eventId,remindersValid};
 })(window);

@@ -12,6 +12,9 @@ button:disabled{opacity:.5;cursor:not-allowed}pre{white-space:pre-wrap;overflow-
 <p class="warning">La prueba solicita permiso para crear calendarios. Compruebe que la ventana de Google muestra su cuenta antes de aceptar. Al finalizar, pulse <strong>Eliminar calendario de ensayo</strong>.</p>
 <button id="start">Conectar y empezar ensayo</button>
 <button id="cleanup" disabled>Eliminar calendario de ensayo</button>
+<label id="recovery" hidden>ID recuperado manualmente desde Google Calendar
+ <input id="recoveryId" autocomplete="off" aria-label="ID recuperado del calendario temporal">
+</label>
 <pre id="log" role="status" aria-live="polite">Listo. Abre esta página en el sitio HTTPS de ensayo y autoriza exactamente ese origen en Google Cloud.</pre>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
@@ -26,7 +29,7 @@ const log=message=>{document.querySelector('#log').textContent+='\n'+message};
 const safe=value=>encodeURIComponent(value);
 const getRecord=()=>{try{const r=JSON.parse(localStorage.getItem(KEY));return r&&/^MF-CALENDAR-SANDBOX-[0-9a-f-]{36}$/.test(r.marker)&&typeof r.name==='string'&&r.name.startsWith('Mis Finanzas ENSAYO ')&&(!r.id||typeof r.id==='string')?r:null}catch{return null}};
 const saveRecord=r=>localStorage.setItem(KEY,JSON.stringify(r));
-const controls=()=>{const invalid=!!localStorage.getItem(KEY)&&!getRecord();document.querySelector('#start').disabled=busy||!!getRecord()||invalid||!safeOrigin;document.querySelector('#cleanup').disabled=busy||!getRecord()};
+const controls=()=>{const record=getRecord(),invalid=!!localStorage.getItem(KEY)&&!record;document.querySelector('#start').disabled=busy||!!record||invalid||!safeOrigin;document.querySelector('#cleanup').disabled=busy||!record;document.querySelector('#recovery').hidden=!record||!!record.id;document.querySelector('#recoveryId').disabled=busy||!record||!!record.id};
 async function api(route,method='GET',body,etag){
  if(!token||Date.now()>=expiry)throw Error('Autorización vencida. Pulsa el botón para conectar de nuevo.');
  const response=await fetch(API+route,{method,headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{}),...(etag?{'If-Match':etag}:{})},body:body?JSON.stringify(body):undefined});
@@ -43,24 +46,8 @@ function authorize(){return new Promise((resolve,reject)=>{
  }});
  client.requestAccessToken({prompt:'consent'});
 })}
-async function findTemporary(r){
- let pageToken='',seen=new Set(),matches=[];
- do{
-  const data=must(await api('/users/me/calendarList?'+new URLSearchParams({maxResults:'250',...(pageToken?{pageToken}:{})})),'Buscar calendario temporal');
-  if(!Array.isArray(data.items))throw Error('La lista de calendarios está incompleta');
-  for(const candidate of data.items.filter(c=>c.summary===r.name)){
-   const checked=await api('/calendars/'+safe(candidate.id));
-   if(checked.ok&&checked.data?.description===r.marker)matches.push(candidate.id);
-  }
-  pageToken=data.nextPageToken||'';
-  if(pageToken&&seen.has(pageToken))throw Error('Paginación de Google Calendar inválida');
-  seen.add(pageToken);
- }while(pageToken);
- if(matches.length!==1)throw Error(matches.length?'Hay varios ensayos con el mismo marcador':'Aún no se encuentra el calendario temporal. Espera y reintenta.');
- r.id=matches[0];saveRecord(r);return r.id;
-}
 async function verifiedCalendar(r){
- if(!r.id)await findTemporary(r);
+ if(!r.id)throw Error('Falta el ID. Busca manualmente el calendario '+r.name+' en Google Calendar y pega su ID antes de eliminarlo.');
  const data=must(await api('/calendars/'+safe(r.id)),'Verificar calendario temporal');
  if(data.summary!==r.name||data.description!==r.marker)throw Error('El ID ya no corresponde a este ensayo. No se modificó ningún calendario.');
  return r.id;
@@ -72,7 +59,7 @@ async function run(){
   const nonce=crypto.randomUUID(),r={marker:'MF-CALENDAR-SANDBOX-'+nonce,name:'Mis Finanzas ENSAYO '+nonce.slice(0,8),id:null};
   saveRecord(r);
   const created=must(await api('/calendars','POST',{summary:r.name,description:r.marker,timeZone:'America/Bogota'}),'Crear calendario temporal');
-  if(!created?.id)throw Error('Google no confirmó el ID. Usa Eliminar para buscar el ensayo; no inicies otro.');
+  if(!created?.id)throw Error('Google no confirmó el ID. Busca manualmente '+r.name+' en Google Calendar, pega su ID y usa Eliminar; no inicies otro.');
   r.id=created.id;saveRecord(r);await verifiedCalendar(r);
   log('Calendario temporal creado: '+r.name);
   const day=new Date(Date.now()+86400000).toISOString().slice(0,10);
@@ -104,6 +91,13 @@ async function cleanup(){
  const r=getRecord();if(busy||!r)return;busy=true;controls();
  try{
   if(!token||Date.now()>=expiry)await authorize();
+  if(!r.id){
+   const candidate=document.querySelector('#recoveryId').value.trim();
+   if(!candidate||candidate.length>1024)throw Error('Pega el ID de '+r.name+' obtenido manualmente en Google Calendar.');
+   const checked=must(await api('/calendars/'+safe(candidate)),'Verificar el ID recuperado');
+   if(checked.id!==candidate||checked.summary!==r.name||checked.description!==r.marker)throw Error('El ID recuperado no coincide con el nombre y marcador de este ensayo. No se eliminó nada.');
+   r.id=candidate;saveRecord(r);log('ID recuperado y verificado para '+r.name+'.');
+  }
   await verifiedCalendar(r);
   const result=await api('/calendars/'+safe(r.id),'DELETE');
   must(result,'Eliminar solo el calendario temporal verificado');
@@ -113,7 +107,7 @@ async function cleanup(){
 }
 document.querySelector('#start').onclick=run;
 document.querySelector('#cleanup').onclick=cleanup;
-if(getRecord())log('Hay un ensayo anterior pendiente. Pulsa Eliminar calendario de ensayo antes de crear otro.');
+if(getRecord()){const r=getRecord();log(r.id?'Hay un ensayo anterior pendiente. Pulsa Eliminar calendario de ensayo antes de crear otro.':'La creación anterior no confirmó el ID. Busca manualmente '+r.name+' en Google Calendar, pega su ID y pulsa Eliminar. No se creará otro calendario.');}
 else if(localStorage.getItem(KEY))log('El registro local del ensayo está dañado. No se creará otro calendario; pide ayuda para localizar el ensayo anterior.');
 if(!safeOrigin)log('No inicies este ensayo aquí. Usa un sitio HTTPS con origen distinto al de Mis Finanzas.');
 controls();
